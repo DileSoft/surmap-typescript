@@ -68,6 +68,7 @@ export class Viewer {
   };
   private hoverX = -1;
   private hoverY = -1;
+  private paintTimer: number | null = null;
 
   constructor(
     private readonly canvas: HTMLCanvasElement,
@@ -82,6 +83,7 @@ export class Viewer {
   }
 
   dispose(): void {
+    this.stopPaintLoop();
     this.canvas.removeEventListener('mousedown', this.onMouseDown);
     window.removeEventListener('mouseup', this.onMouseUp);
     this.canvas.removeEventListener('mousemove', this.onMouseMove);
@@ -122,6 +124,10 @@ export class Viewer {
   setEdit(edit: EditOptions): void {
     this.edit = { ...edit };
     this.canvas.style.cursor = this.edit.tool === 'off' ? 'grab' : 'crosshair';
+    if (this.edit.tool === 'off') {
+      this.drag = 'none';
+      this.stopPaintLoop();
+    }
     if (this.edit.tool === 'off' && this.hoverX >= 0) {
       this.hoverX = -1;
       this.hoverY = -1;
@@ -340,17 +346,18 @@ export class Viewer {
       return;
     }
     if (e.button === 0 && this.edit.tool !== 'off') {
-      this.drag = 'paint';
-      this.applyEditAt(e.offsetX, e.offsetY);
+      this.startPainting(e.offsetX, e.offsetY);
     }
   };
 
   private onMouseUp = () => {
     this.drag = 'none';
+    this.stopPaintLoop();
   };
 
   private onMouseLeave = () => {
     this.drag = 'none';
+    this.stopPaintLoop();
     if (this.hoverX >= 0) {
       this.hoverX = -1;
       this.hoverY = -1;
@@ -375,6 +382,29 @@ export class Viewer {
     if (this.edit.tool !== 'off') this.drawBrush(e.offsetX, e.offsetY);
     this.cb.onCursor?.(this.describeCursor(e.offsetX, e.offsetY));
   };
+
+  /** Starts painting and keeps re-applying the tool while the button is held. */
+  private startPainting(px: number, py: number): void {
+    this.drag = 'paint';
+    this.hoverX = px;
+    this.hoverY = py;
+    this.applyEditAt(px, py);
+    this.stopPaintLoop();
+    this.paintTimer = window.setInterval(() => {
+      if (this.drag !== 'paint') {
+        this.stopPaintLoop();
+        return;
+      }
+      this.applyEditAt(this.hoverX, this.hoverY);
+    }, 60);
+  }
+
+  private stopPaintLoop(): void {
+    if (this.paintTimer !== null) {
+      window.clearInterval(this.paintTimer);
+      this.paintTimer = null;
+    }
+  }
 
   private onWheel = (e: WheelEvent) => {
     e.preventDefault();
