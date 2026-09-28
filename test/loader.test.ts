@@ -14,7 +14,9 @@ import { fileURLToPath } from 'node:url';
 import { describe, expect, test } from 'vitest';
 
 import { loadPalette, loadVmc, loadVpr, parseWorldConfig } from '../src/loader';
+import { VmcDecoder } from '../src/huffman';
 import { renderPrepare } from '../src/luts';
+import { saveVmc, saveVmp } from '../src/save';
 import { VrtMap } from '../src/vmap';
 import { applyPaletteCycle, applyWaveCycle, buildPalette } from '../src/palette';
 
@@ -232,5 +234,92 @@ describe('terrain editing (SURMAP Toolzer)', () => {
     map.resetAll();
     expect(map.height[10 * level.sizeX + 500]).toBe(50);
     expect(map.height[10 * level.sizeX + 1]).toBe(50);
+  });
+});
+
+describe('saving world files', () => {
+  const begin = [1, 32, 64, 72, 88, 104, 112, 120];
+  const end = [31, 63, 71, 87, 103, 111, 119, 127];
+
+  function makeMap() {
+    const sizeX = 2048;
+    const sizeY = 16;
+    const height = new Uint8Array(sizeX * sizeY);
+    const meta = new Uint8Array(sizeX * sizeY);
+    for (let y = 0; y < sizeY; y++) {
+      for (let x = 0; x < sizeX; x++) {
+        const i = y * sizeX + x;
+        height[i] = (((x >> 2) ^ (y * 13)) & 0xff) as number;
+        meta[i] = ((((x >> 6) & 7) << 3) | ((x + y) & 1 ? 0 : 0x04)) & 0xff;
+      }
+    }
+    return { sizeX, sizeY, height, meta };
+  }
+
+  test('saveVmp writes per-row heights then flags', () => {
+    const level = makeMap();
+    const map = new VrtMap(level, renderPrepare(begin, end, 0));
+    map.deltaZone(600, 8, 25, 3, 17, 0, 0);
+
+    const vmp = saveVmp(map);
+    expect(vmp.length).toBe(level.sizeX * level.sizeY * 2);
+    for (let y = 0; y < level.sizeY; y++) {
+      const src = y * level.sizeX;
+      const dst = y * level.sizeX * 2;
+      expect(Buffer.from(vmp.subarray(dst, dst + level.sizeX))).toEqual(
+        Buffer.from(map.height.subarray(src, src + level.sizeX)),
+      );
+      expect(Buffer.from(vmp.subarray(dst + level.sizeX, dst + 2 * level.sizeX))).toEqual(
+        Buffer.from(map.meta.subarray(src, src + level.sizeX)),
+      );
+    }
+  });
+
+  test('saveVmc round-trips through the VMC decoder', () => {
+    const level = makeMap();
+    const map = new VrtMap(level, renderPrepare(begin, end, 0));
+    map.deltaZone(600, 8, 25, 3, 17, 0, 0);
+    map.deltaZone(1200, 4, 10, 0, -9, 0, 0);
+
+    const vmc = saveVmc(map);
+    const view = new DataView(vmc.buffer, vmc.byteOffset, vmc.byteLength);
+    const tableBytes = level.sizeY * 6;
+    const decoder = new VmcDecoder(vmc, tableBytes);
+
+    const height = new Uint8Array(level.sizeX * level.sizeY);
+    const meta = new Uint8Array(level.sizeX * level.sizeY);
+    for (let y = 0; y < level.sizeY; y++) {
+      const off = view.getInt32(y * 6, true);
+      const size = view.getInt16(y * 6 + 4, true);
+      const end2 = decoder.expand(vmc, off, height, meta, y * level.sizeX);
+      expect(end2).toBe(off + size);
+    }
+    expect(Buffer.from(height).equals(Buffer.from(map.height))).toBe(true);
+    expect(Buffer.from(meta).equals(Buffer.from(map.meta))).toBe(true);
+  });
+
+  test('saveVmc handles a single-symbol (flat) line', () => {
+    const sizeX = 2048;
+    const sizeY = 4;
+    const level = {
+      sizeX,
+      sizeY,
+      height: new Uint8Array(sizeX * sizeY),
+      meta: new Uint8Array(sizeX * sizeY),
+    };
+    const map = new VrtMap(level, renderPrepare(begin, end, 0));
+    const vmc = saveVmc(map);
+
+    const view = new DataView(vmc.buffer, vmc.byteOffset, vmc.byteLength);
+    const decoder = new VmcDecoder(vmc, sizeY * 6);
+    const height = new Uint8Array(sizeX * sizeY);
+    const meta = new Uint8Array(sizeX * sizeY);
+    for (let y = 0; y < sizeY; y++) {
+      const off = view.getInt32(y * 6, true);
+      const size = view.getInt16(y * 6 + 4, true);
+      expect(decoder.expand(vmc, off, height, meta, y * sizeX)).toBe(off + size);
+    }
+    expect(height.every((v) => v === 0)).toBe(true);
+    expect(meta.every((v) => v === 0)).toBe(true);
   });
 });

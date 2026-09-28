@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { loadPalette, loadVmc, loadVmp, loadVpr, parseWorldConfig, type WorldConfig } from './loader';
 import { renderPrepare } from './luts';
 import { applyPaletteCycle, applyWaveCycle, buildPalette, type Palette } from './palette';
+import { saveVmc, saveVmp } from './save';
 import { VrtMap } from './vmap';
 import { Viewer, type DebugMode, type EditTool, type RenderMode } from './viewer/viewer';
 
@@ -31,6 +32,19 @@ async function readPalettes(files: File[]): Promise<PaletteFile[]> {
     if (f.name.toLowerCase().endsWith('.pal')) out.push({ name: f.name, bytes: await readFile(f) });
   }
   return out;
+}
+
+/** Triggers a browser download of a byte buffer. */
+function downloadBytes(bytes: Uint8Array, name: string): void {
+  const blob = new Blob([bytes as BlobPart], { type: 'application/octet-stream' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = name;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
 /** Merges palette lists by file name (new entries win), preserving order. */
@@ -131,6 +145,7 @@ export default function App() {
   const [editRadius, setEditRadius] = useState(32);
   const [editStrength, setEditStrength] = useState(8);
   const [editSmooth, setEditSmooth] = useState(5);
+  const [saveFormat, setSaveFormat] = useState<'vmc' | 'vmp'>('vmp');
 
   useEffect(() => {
     if (!canvasRef.current) return;
@@ -183,6 +198,7 @@ export default function App() {
 
     setMap(nextMap);
     setConfig(cfg);
+    setSaveFormat(cfg.isCompressed ? 'vmc' : 'vmp');
     setPalettes(paletteFiles);
     setPaletteSel(baseIndex);
     setBasePalette(palette);
@@ -249,6 +265,21 @@ export default function App() {
       .map((r) => Array.from(r?.files ?? []))
       .flat();
     await loadFromFiles(files);
+  }
+
+  /** Saves the current (edited) surface as .vmc or .vmp. */
+  function saveWorld() {
+    if (!map || !config) return;
+    try {
+      setStatus('Сохранение...');
+      const bytes = saveFormat === 'vmc' ? saveVmc(map) : saveVmp(map);
+      const name = `${config.fileName || 'output'}.${saveFormat}`;
+      downloadBytes(bytes, name);
+      setStatus(`Сохранено: ${name} (${(bytes.length / 1048576).toFixed(1)} МБ).`);
+    } catch (e) {
+      console.error(e);
+      setStatus('Ошибка сохранения: ' + (e as Error).message);
+    }
   }
 
   const modeList = shimmerModes(config);
@@ -467,6 +498,20 @@ export default function App() {
           <button disabled={!map} onClick={() => viewerRef.current?.resetEdits()}>
             сбросить рельеф
           </button>
+          <label>
+            формат
+            <select
+              value={saveFormat}
+              disabled={!map}
+              onChange={(e) => setSaveFormat(e.target.value as 'vmc' | 'vmp')}
+            >
+              <option value="vmc">.vmc (сжатый)</option>
+              <option value="vmp">.vmp (несжатый)</option>
+            </select>
+          </label>
+          <button disabled={!map} onClick={saveWorld}>
+            сохранить файл
+          </button>
           <Hint>
             Выберите инструмент, затем <b>ЛКМ</b> — применить. Можно зажать и вести, как
             кистью: пока кнопка нажата, инструмент срабатывает повторно. <b>ПКМ</b> —
@@ -477,6 +522,10 @@ export default function App() {
             склон). <b>сгладить</b> выравнивает рельеф по среднему.
             <br />
             «сбросить рельеф» возвращает загруженную карту высот и флаги.
+            <br />
+            «сохранить файл» выгружает текущий (отредактированный) рельеф: <code>.vmc</code>
+            — сжатый, как в игре, или <code>.vmp</code> — несжатый. Имя берётся из{' '}
+            <code>world.ini</code> (<code>File Name</code>).
           </Hint>
         </div>
       </header>
