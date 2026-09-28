@@ -5,6 +5,14 @@
 оригинальный C++ из репозитория [KranX/Vangers](https://github.com/KranX/Vangers)
 один-в-один, включая целочисленную фиксированную арифметику.
 
+## Онлайн
+
+Приложение опубликовано на GitHub Pages: **https://dilesoft.github.io/surmap-typescript/**
+
+Сборка и деплой автоматизированы в `.github/workflows/deploy-pages.yml` (при пуше в
+`master`). Для проектной страницы `vite.config.ts` задаёт `base=/surmap-typescript/`
+на сборке.
+
 ## Что портировано
 
 | Компонент | Оригинал |
