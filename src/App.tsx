@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { loadPalette, loadVmc, loadVmp, loadVpr, parseWorldConfig, type WorldConfig } from './loader';
 import { renderPrepare } from './luts';
 import { applyPaletteCycle, applyWaveCycle, buildPalette, type Palette } from './palette';
@@ -39,6 +39,18 @@ function mergePalettes(base: PaletteFile[], added: PaletteFile[]): PaletteFile[]
   for (const p of base) map.set(p.name.toLowerCase(), p);
   for (const p of added) map.set(p.name.toLowerCase(), p);
   return [...map.values()];
+}
+
+/** Round "?" icon that reveals a tooltip on hover/focus. */
+function Hint({ children }: { children: ReactNode }) {
+  return (
+    <span className="tip" tabIndex={0}>
+      <span className="tip-icon" aria-hidden="true">
+        ?
+      </span>
+      <span className="tip-pop">{children}</span>
+    </span>
+  );
 }
 
 /** Shimmer = the per-frame palette animation (pal_iter0/1/2), applied statically. */
@@ -242,6 +254,17 @@ export default function App() {
               }}
             />
           </label>
+          <Hint>
+            Выберите в одном диалоге все файлы мира:
+            <br />• <code>world.ini</code> — параметры мира (размер, палитра, цвета);
+            <br />• <code>.vmp</code> (несжатый) или <code>.vmc</code> (сжатый) — рельеф;
+            <br />• <code>.vpr</code> — уровень воды/сезонов;
+            <br />• <code>.pal</code> — палитра (можно несколько, см. «цикл»).
+            <br />
+            Обычно лежат в папке мира, напр. <code>data/&lt;chain&gt;/&lt;world&gt;/</code>:
+            <code>world.ini</code>, <code>output.vmc</code>, <code>output.vpr</code>,{' '}
+            <code>harmony.pal</code>.
+          </Hint>
           <details className="separately">
             <summary>Загрузить по отдельности</summary>
             <div className="sep-body">
@@ -336,10 +359,15 @@ export default function App() {
               }}
             />
           </label>
-          <span className="hint-inline">
-            обычно в игре: <code>&lt;bin&gt;\resource\pal\</code> — fostral.pal, fostral1.pal,
-            fostral2.pal (Glorx/Necross аналогично; по 3 у больших миров)
-          </span>
+          <Hint>
+            Палитры-циклы (полная смена палитры): в игре лежат в{' '}
+            <code>&lt;bin&gt;\resource\pal\</code>. У больших миров по три —
+            <code>fostral.pal</code> / <code>fostral1.pal</code> / <code>fostral2.pal</code>
+            (для Glorx/Necross аналогично: <code>glorx*</code>, <code>necross*</code>).
+            <br />
+            Каждый загруженный здесь <code>.pal</code> становится вариантом «цикла»; палитра из{' '}
+            <code>world.ini</code> (<code>Palette File</code>) выбирается по умолчанию.
+          </Hint>
 
           <label>
             мерцание
