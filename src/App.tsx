@@ -74,6 +74,19 @@ function Hint({ children }: { children: ReactNode }) {
   );
 }
 
+/** Ribbon tab identifiers. The 3D tab is contextual (only with the shape tool). */
+type RibbonTab = 'file' | 'view' | 'palette' | 'editor' | 'shape';
+
+/** A labelled ribbon group: a row of controls with a caption underneath. */
+function Group({ label, children }: { label: string; children: ReactNode }) {
+  return (
+    <section className="group">
+      <div className="group-body">{children}</div>
+      <div className="group-caption">{label}</div>
+    </section>
+  );
+}
+
 /** Shimmer = the per-frame palette animation (pal_iter0/1/2), applied statically. */
 type ShimmerKind = 'none' | 'wave' | 'dyn' | 'all';
 interface ShimmerMode {
@@ -155,6 +168,9 @@ export default function App() {
   const [saveFormat, setSaveFormat] = useState<'vmc' | 'vmp'>('vmp');
   const [canUndo, setCanUndo] = useState(false);
   const [canRedo, setCanRedo] = useState(false);
+
+  const [tab, setTab] = useState<RibbonTab>('file');
+  const [ribbonCollapsed, setRibbonCollapsed] = useState(false);
 
   const [shapeModel, setShapeModel] = useState<C3DModel | null>(null);
   const [shapeMode, setShapeMode] = useState(0);
@@ -251,6 +267,12 @@ export default function App() {
       shapePreview: editTool === 'shape' ? shapePreview : null,
     });
   }, [editTool, editRadius, editStrength, editSmooth, shapeInfo, shapePreview]);
+
+  // The 3D tab is contextual: open it with the shape tool, leave it when the tool changes.
+  useEffect(() => {
+    if (editTool === 'shape') setTab('shape');
+    else setTab((t) => (t === 'shape' ? 'editor' : t));
+  }, [editTool]);
 
   /** Stamps the loaded 3D model at a clicked voxel. */
   function placeShape(x: number, y: number) {
@@ -390,422 +412,489 @@ export default function App() {
 
   const modeList = shimmerModes(config);
 
+  const tabs: { id: RibbonTab; label: string }[] = [
+    { id: 'file', label: 'Файл' },
+    { id: 'view', label: 'Вид' },
+    { id: 'palette', label: 'Мерцание / цикл' },
+    { id: 'editor', label: 'Редактор' },
+    ...(editTool === 'shape' ? [{ id: 'shape' as RibbonTab, label: '3D-модель' }] : []),
+  ];
+
   return (
     <>
-      <header>
-        <div className="row">
-          <span className="row-label">загрузка</span>
-          <label className="primary">
-            Файлы мира
-            <input
-              type="file"
-              multiple
-              accept=".ini,.txt,.vmp,.vmc,.vpr,.pal"
-              onChange={(e) => {
-                const files = [...(e.target.files ?? [])];
-                e.target.value = '';
-                if (files.length) void loadFromFiles(files);
-              }}
-            />
-          </label>
-          <Hint>
-            Выберите в одном диалоге все файлы мира:
-            <br />• <code>world.ini</code> — параметры мира (размер, палитра, цвета);
-            <br />• <code>.vmp</code> (несжатый) или <code>.vmc</code> (сжатый) — рельеф;
-            <br />• <code>.vpr</code> — уровень воды/сезонов;
-            <br />• <code>.pal</code> — палитра (можно несколько, см. «цикл»).
-            <br />
-            Обычно лежат в папке мира, напр. <code>data/&lt;chain&gt;/&lt;world&gt;/</code>:
-            <code>world.ini</code>, <code>output.vmc</code>, <code>output.vpr</code>,{' '}
-            <code>harmony.pal</code>.
-          </Hint>
-          <details className="separately">
-            <summary>Загрузить по отдельности</summary>
-            <div className="sep-body">
-              <label>
-                world.ini <input ref={iniRef} type="file" accept=".ini,.txt" />
-              </label>
-              <label>
-                data <input ref={dataRef} type="file" accept=".vmp,.vmc" />
-              </label>
-              <label>
-                .vpr <input ref={vprRef} type="file" accept=".vpr" />
-              </label>
-              <label>
-                .pal <input ref={palRef} type="file" accept=".pal" multiple />
-              </label>
-              <button onClick={() => void loadSeparately()}>Загрузить</button>
-            </div>
-          </details>
-        </div>
-
-        <div className="row">
-          <span className="row-label">рендер</span>
-          <label>
-            режим
-            <select
-              value={renderMode}
-              onChange={(e) => {
-                const mode = e.target.value as RenderMode;
-                setRenderMode(mode);
-                viewerRef.current?.setRenderMode(mode);
-              }}
-            >
-              <option value="reg">regRender (тени)</option>
-              <option value="line">LINE_render</option>
-            </select>
-          </label>
-          <label>
-            вид
-            <select
-              value={debug}
-              onChange={(e) => {
-                const mode = e.target.value as DebugMode;
-                setDebug(mode);
-                viewerRef.current?.setDebug(mode);
-              }}
-            >
-              <option value="color">цвет</option>
-              <option value="heights">высоты</option>
-              <option value="double">double level</option>
-              <option value="terrain">террейн</option>
-              <option value="shadow">SHADOW</option>
-              <option value="objshadow">OBJSHADOW</option>
-              <option value="doublebits">DOUBLE бит</option>
-            </select>
-          </label>
-          <button disabled={!map} onClick={() => viewerRef.current?.fit()}>
-            Fit
-          </button>
-          <button disabled={!map} onClick={() => viewerRef.current?.oneToOne()}>
-            1:1
+      <header className="ribbon">
+        <div className="tabbar">
+          <div className="tabs">
+            {tabs.map((t) => (
+              <button
+                key={t.id}
+                className={'tab' + (tab === t.id ? ' active' : '')}
+                onClick={() => setTab(t.id)}
+              >
+                {t.label}
+              </button>
+            ))}
+          </div>
+          <button
+            className="collapse"
+            title={ribbonCollapsed ? 'Развернуть ленту' : 'Свернуть ленту'}
+            onClick={() => setRibbonCollapsed((c) => !c)}
+          >
+            {ribbonCollapsed ? '⌄' : '⌃'}
           </button>
         </div>
 
-        <div className="row">
-          <span className="row-label">мерцание / цикл</span>
+        {!ribbonCollapsed && (
+          <div className="panel">
+            {tab === 'file' && (
+              <>
+                <Group label="Загрузка мира">
+                  <label className="primary">
+                    Файлы мира
+                    <input
+                      type="file"
+                      aria-label="Файлы мира"
+                      multiple
+                      accept=".ini,.txt,.vmp,.vmc,.vpr,.pal"
+                      onChange={(e) => {
+                        const files = [...(e.target.files ?? [])];
+                        e.target.value = '';
+                        if (files.length) void loadFromFiles(files);
+                      }}
+                    />
+                  </label>
+                  <Hint>
+                    Выберите в одном диалоге все файлы мира:
+                    <br />• <code>world.ini</code> — параметры мира (размер, палитра, цвета);
+                    <br />• <code>.vmp</code> (несжатый) или <code>.vmc</code> (сжатый) — рельеф;
+                    <br />• <code>.vpr</code> — уровень воды/сезонов;
+                    <br />• <code>.pal</code> — палитра (можно несколько, см. «цикл»).
+                    <br />
+                    Обычно лежат в папке мира, напр. <code>data/&lt;chain&gt;/&lt;world&gt;/</code>:
+                    <code>world.ini</code>, <code>output.vmc</code>, <code>output.vpr</code>,{' '}
+                    <code>harmony.pal</code>.
+                  </Hint>
+                  <details className="separately">
+                    <summary>Загрузить по отдельности</summary>
+                    <div className="sep-body">
+                      <label>
+                        world.ini <input ref={iniRef} type="file" accept=".ini,.txt" />
+                      </label>
+                      <label>
+                        data <input ref={dataRef} type="file" accept=".vmp,.vmc" />
+                      </label>
+                      <label>
+                        .vpr <input ref={vprRef} type="file" accept=".vpr" />
+                      </label>
+                      <label>
+                        .pal <input ref={palRef} type="file" accept=".pal" multiple />
+                      </label>
+                      <button onClick={() => void loadSeparately()}>Загрузить</button>
+                    </div>
+                  </details>
+                </Group>
+                <Group label="Сохранение">
+                  <label>
+                    формат
+                    <select
+                      value={saveFormat}
+                      disabled={!map}
+                      onChange={(e) => setSaveFormat(e.target.value as 'vmc' | 'vmp')}
+                    >
+                      <option value="vmc">.vmc (сжатый)</option>
+                      <option value="vmp">.vmp (несжатый)</option>
+                    </select>
+                  </label>
+                  <button disabled={!map} onClick={saveWorld}>
+                    сохранить файл
+                  </button>
+                  <Hint>
+                    «сохранить файл» выгружает текущий (отредактированный) рельеф:{' '}
+                    <code>.vmc</code> — сжатый, как в игре, или <code>.vmp</code> — несжатый.
+                    Имя берётся из <code>world.ini</code> (<code>File Name</code>).
+                  </Hint>
+                </Group>
+              </>
+            )}
 
-          <label>
-            цикл (палитра)
-            <select
-              value={paletteSel}
-              disabled={palettes.length <= 1}
-              onChange={(e) => selectPalette(Number(e.target.value))}
-            >
-              {palettes.length === 0 && <option>— палитры не загружены —</option>}
-              {palettes.map((p, i) => (
-                <option key={i} value={i}>
-                  {p.name}
-                </option>
-              ))}
-            </select>
-          </label>
-          <label>
-            палитры (.pal)
-            <input
-              type="file"
-              multiple
-              accept=".pal"
-              onChange={(e) => {
-                const files = [...(e.target.files ?? [])];
-                e.target.value = '';
-                if (files.length) void addPalettes(files);
-              }}
-            />
-          </label>
-          <Hint>
-            Палитры-циклы (полная смена палитры): в игре лежат в{' '}
-            <code>&lt;bin&gt;\resource\pal\</code>. У больших миров по три —
-            <code>fostral.pal</code> / <code>fostral1.pal</code> / <code>fostral2.pal</code>
-            (для Glorx/Necross аналогично: <code>glorx*</code>, <code>necross*</code>).
-            <br />
-            Каждый загруженный здесь <code>.pal</code> становится вариантом «цикла»; палитра из{' '}
-            <code>world.ini</code> (<code>Palette File</code>) выбирается по умолчанию.
-          </Hint>
+            {tab === 'view' && (
+              <>
+                <Group label="рендер">
+                  <label>
+                    режим
+                    <select
+                      value={renderMode}
+                      onChange={(e) => {
+                        const mode = e.target.value as RenderMode;
+                        setRenderMode(mode);
+                        viewerRef.current?.setRenderMode(mode);
+                      }}
+                    >
+                      <option value="reg">regRender (тени)</option>
+                      <option value="line">LINE_render</option>
+                    </select>
+                  </label>
+                  <label>
+                    вид
+                    <select
+                      value={debug}
+                      onChange={(e) => {
+                        const mode = e.target.value as DebugMode;
+                        setDebug(mode);
+                        viewerRef.current?.setDebug(mode);
+                      }}
+                    >
+                      <option value="color">цвет</option>
+                      <option value="heights">высоты</option>
+                      <option value="double">double level</option>
+                      <option value="terrain">террейн</option>
+                      <option value="shadow">SHADOW</option>
+                      <option value="objshadow">OBJSHADOW</option>
+                      <option value="doublebits">DOUBLE бит</option>
+                    </select>
+                  </label>
+                </Group>
+                <Group label="Масштаб">
+                  <button disabled={!map} onClick={() => viewerRef.current?.fit()}>
+                    Fit
+                  </button>
+                  <button disabled={!map} onClick={() => viewerRef.current?.oneToOne()}>
+                    1:1
+                  </button>
+                </Group>
+              </>
+            )}
 
-          <label>
-            мерцание
-            <select
-              value={shimmerSel}
-              disabled={modeList.length <= 1}
-              onChange={(e) => setShimmerSel(Number(e.target.value))}
-            >
-              {modeList.map((m, i) => (
-                <option key={i} value={i}>
-                  {m.label}
-                </option>
-              ))}
-            </select>
-          </label>
-          <label title="Положение мерцания (статически)">
-            фаза
-            <input
-              type="range"
-              min={0}
-              max={100}
-              value={phase}
-              disabled={modeList[shimmerSel]?.kind === 'none'}
-              onChange={(e) => setPhase(Number(e.target.value))}
-            />
-            <span className="phase-val">{phase}%</span>
-          </label>
-        </div>
+            {tab === 'palette' && (
+              <>
+                <Group label="Цикл (палитра)">
+                  <label>
+                    цикл (палитра)
+                    <select
+                      value={paletteSel}
+                      disabled={palettes.length <= 1}
+                      onChange={(e) => selectPalette(Number(e.target.value))}
+                    >
+                      {palettes.length === 0 && <option>— палитры не загружены —</option>}
+                      {palettes.map((p, i) => (
+                        <option key={i} value={i}>
+                          {p.name}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  <label>
+                    палитры (.pal)
+                    <input
+                      type="file"
+                      multiple
+                      accept=".pal"
+                      onChange={(e) => {
+                        const files = [...(e.target.files ?? [])];
+                        e.target.value = '';
+                        if (files.length) void addPalettes(files);
+                      }}
+                    />
+                  </label>
+                  <Hint>
+                    Палитры-циклы (полная смена палитры): в игре лежат в{' '}
+                    <code>&lt;bin&gt;\resource\pal\</code>. У больших миров по три —
+                    <code>fostral.pal</code> / <code>fostral1.pal</code> /{' '}
+                    <code>fostral2.pal</code> (для Glorx/Necross аналогично: <code>glorx*</code>,{' '}
+                    <code>necross*</code>).
+                    <br />
+                    Каждый загруженный здесь <code>.pal</code> становится вариантом «цикла»;
+                    палитра из <code>world.ini</code> (<code>Palette File</code>) выбирается по
+                    умолчанию.
+                  </Hint>
+                </Group>
+                <Group label="Мерцание">
+                  <label>
+                    мерцание
+                    <select
+                      value={shimmerSel}
+                      disabled={modeList.length <= 1}
+                      onChange={(e) => setShimmerSel(Number(e.target.value))}
+                    >
+                      {modeList.map((m, i) => (
+                        <option key={i} value={i}>
+                          {m.label}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  <label title="Положение мерцания (статически)">
+                    фаза
+                    <input
+                      type="range"
+                      min={0}
+                      max={100}
+                      value={phase}
+                      disabled={modeList[shimmerSel]?.kind === 'none'}
+                      onChange={(e) => setPhase(Number(e.target.value))}
+                    />
+                    <span className="phase-val">{phase}%</span>
+                  </label>
+                </Group>
+              </>
+            )}
 
-        <div className="row">
-          <span className="row-label">редактор</span>
-          <label>
-            инструмент
-            <select
-              value={editTool}
-              onChange={(e) => setEditTool(e.target.value as EditTool)}
-            >
-              <option value="off">выкл</option>
-              <option value="mountain">гора (+)</option>
-              <option value="depression">впадина (−)</option>
-              <option value="smooth">сгладить</option>
-              <option value="shape">3D-модель</option>
-            </select>
-          </label>
-          <label>
-            радиус
-            <input
-              type="range"
-              min={1}
-              max={175}
-              value={editRadius}
-              disabled={editTool === 'off'}
-              onChange={(e) => setEditRadius(Number(e.target.value))}
-            />
-            <span className="phase-val">{editRadius}</span>
-          </label>
-          <label>
-            сила
-            <input
-              type="range"
-              min={1}
-              max={64}
-              value={editStrength}
-              disabled={editTool === 'off' || editTool === 'smooth'}
-              onChange={(e) => setEditStrength(Number(e.target.value))}
-            />
-            <span className="phase-val">{editStrength}</span>
-          </label>
-          <label>
-            сглаживание
-            <input
-              type="range"
-              min={0}
-              max={10}
-              value={editSmooth}
-              disabled={editTool === 'off'}
-              onChange={(e) => setEditSmooth(Number(e.target.value))}
-            />
-            <span className="phase-val">{editSmooth}</span>
-          </label>
-          <button disabled={!map} onClick={() => viewerRef.current?.resetEdits()}>
-            сбросить рельеф
-          </button>
-          <button disabled={!canUndo} onClick={() => viewerRef.current?.undo()} title="Ctrl+Z">
-            ↶ undo
-          </button>
-          <button disabled={!canRedo} onClick={() => viewerRef.current?.redo()} title="Ctrl+Y">
-            ↷ redo
-          </button>
-          <label>
-            формат
-            <select
-              value={saveFormat}
-              disabled={!map}
-              onChange={(e) => setSaveFormat(e.target.value as 'vmc' | 'vmp')}
-            >
-              <option value="vmc">.vmc (сжатый)</option>
-              <option value="vmp">.vmp (несжатый)</option>
-            </select>
-          </label>
-          <button disabled={!map} onClick={saveWorld}>
-            сохранить файл
-          </button>
-          <Hint>
-            Выберите инструмент, затем <b>ЛКМ</b> — применить. Можно зажать и вести, как
-            кистью: пока кнопка нажата, инструмент срабатывает повторно. <b>ПКМ</b> —
-            панорама, колесо — зум.
-            <br />
-            <b>гора</b>/<b>впадина</b> приподнимают/опускают круг радиуса «радиус» на «силу»
-            за клик; «сглаживание» задаёт плавность края (0 — ровный цилиндр, 10 — только
-            склон). <b>сгладить</b> выравнивает рельеф по среднему.
-            <br />
-            «сбросить рельеф» возвращает загруженную карту высот и флаги.
-            <br />
-            «сохранить файл» выгружает текущий (отредактированный) рельеф: <code>.vmc</code>
-            — сжатый, как в игре, или <code>.vmp</code> — несжатый. Имя берётся из{' '}
-            <code>world.ini</code> (<code>File Name</code>).
-          </Hint>
-        </div>
+            {tab === 'editor' && (
+              <>
+                <Group label="Инструмент">
+                  <label>
+                    инструмент
+                    <select
+                      value={editTool}
+                      onChange={(e) => setEditTool(e.target.value as EditTool)}
+                    >
+                      <option value="off">выкл</option>
+                      <option value="mountain">гора (+)</option>
+                      <option value="depression">впадина (−)</option>
+                      <option value="smooth">сгладить</option>
+                      <option value="shape">3D-модель</option>
+                    </select>
+                  </label>
+                  <Hint>
+                    Выберите инструмент, затем <b>ЛКМ</b> — применить. Можно зажать и вести, как
+                    кистью: пока кнопка нажата, инструмент срабатывает повторно. <b>ПКМ</b> —
+                    панорама, колесо — зум.
+                    <br />
+                    <b>гора</b>/<b>впадина</b> приподнимают/опускают круг радиуса «радиус» на
+                    «силу» за клик; «сглаживание» задаёт плавность края (0 — ровный цилиндр, 10 —
+                    только склон). <b>сгладить</b> выравнивает рельеф по среднему.
+                    <br />
+                    Инструмент <b>3D-модель</b> открывает вкладку «3D-модель».
+                  </Hint>
+                </Group>
+                <Group label="Параметры">
+                  <label>
+                    радиус
+                    <input
+                      type="range"
+                      min={1}
+                      max={175}
+                      value={editRadius}
+                      disabled={editTool === 'off'}
+                      onChange={(e) => setEditRadius(Number(e.target.value))}
+                    />
+                    <span className="phase-val">{editRadius}</span>
+                  </label>
+                  <label>
+                    сила
+                    <input
+                      type="range"
+                      min={1}
+                      max={64}
+                      value={editStrength}
+                      disabled={editTool === 'off' || editTool === 'smooth'}
+                      onChange={(e) => setEditStrength(Number(e.target.value))}
+                    />
+                    <span className="phase-val">{editStrength}</span>
+                  </label>
+                  <label>
+                    сглаживание
+                    <input
+                      type="range"
+                      min={0}
+                      max={10}
+                      value={editSmooth}
+                      disabled={editTool === 'off'}
+                      onChange={(e) => setEditSmooth(Number(e.target.value))}
+                    />
+                    <span className="phase-val">{editSmooth}</span>
+                  </label>
+                </Group>
+                <Group label="История">
+                  <button disabled={!canUndo} onClick={() => viewerRef.current?.undo()} title="Ctrl+Z">
+                    ↶ undo
+                  </button>
+                  <button disabled={!canRedo} onClick={() => viewerRef.current?.redo()} title="Ctrl+Y">
+                    ↷ redo
+                  </button>
+                  <button disabled={!map} onClick={() => viewerRef.current?.resetEdits()}>
+                    сбросить рельеф
+                  </button>
+                  <Hint>
+                    «сбросить рельеф» возвращает загруженную карту высот и флаги. Undo/redo также
+                    работают по <code>Ctrl+Z</code> / <code>Ctrl+Shift+Z</code> / <code>Ctrl+Y</code>.
+                  </Hint>
+                </Group>
+              </>
+            )}
 
-        {editTool === 'shape' && (
-        <div className="row">
-          <span className="row-label">3D-модель</span>
-          <label>
-            файл (.c3d/.m3d)
-            <input
-              type="file"
-              accept=".c3d,.m3d"
-              onChange={(e) => {
-                const f = e.target.files?.[0];
-                e.target.value = '';
-                if (!f) return;
-                void (async () => {
-                  try {
-                    const model = loadC3D(await readFile(f));
-                    setShapeModel(model);
-                    setEditTool('shape');
-                    setStatus(
-                      `${f.name}: ${model.numPoly} полигонов, ${model.numVert} вершин.`,
-                    );
-                  } catch (err) {
-                    console.error(err);
-                    setStatus('Ошибка модели: ' + (err as Error).message);
-                  }
-                })();
-              }}
-            />
-          </label>
-          <span className="phase-val" title="Размер отпечатка модели в вокселях">
-            {shapeModel ? `${shapeInfo?.size ?? '—'}×${shapeInfo?.size ?? '—'}` : 'не загружена'}
-          </span>
-          <label>
-            режим
-            <select value={shapeMode} onChange={(e) => setShapeMode(Number(e.target.value))}>
-              <option value={0}>map</option>
-              <option value={1}>max</option>
-              <option value={2}>min</option>
-              <option value={3}>mean</option>
-              <option value={4}>add</option>
-            </select>
-          </label>
-          <label>
-            уровень
-            <input
-              type="range"
-              min={0}
-              max={255}
-              value={shapeLevel}
-              onChange={(e) => setShapeLevel(Number(e.target.value))}
-            />
-            <span className="phase-val">{shapeLevel}</span>
-          </label>
-          <label>
-            сторона
-            <select
-              value={shapeSide}
-              onChange={(e) => setShapeSide(e.target.value as 'up' | 'down')}
-            >
-              <option value="up">верх</option>
-              <option value="down">низ</option>
-            </select>
-          </label>
-          <label>
-            инверсия
-            <input
-              type="checkbox"
-              checked={shapeInverse}
-              onChange={(e) => setShapeInverse(e.target.checked)}
-            />
-          </label>
-          <label>
-            шум %
-            <input
-              type="range"
-              min={0}
-              max={100}
-              value={shapeNoiseLevel}
-              onChange={(e) => setShapeNoiseLevel(Number(e.target.value))}
-            />
-            <span className="phase-val">{shapeNoiseLevel}</span>
-          </label>
-          <label>
-            амп
-            <input
-              type="range"
-              min={0}
-              max={64}
-              value={shapeNoiseAmp}
-              onChange={(e) => setShapeNoiseAmp(Number(e.target.value))}
-            />
-            <span className="phase-val">{shapeNoiseAmp}</span>
-          </label>
-          <label>
-            поворот Z
-            <input
-              type="range"
-              min={-180}
-              max={180}
-              value={shapeYaw}
-              onChange={(e) => setShapeYaw(Number(e.target.value))}
-            />
-            <span className="phase-val">{shapeYaw}°</span>
-          </label>
-          <label>
-            наклон X
-            <input
-              type="range"
-              min={-180}
-              max={180}
-              value={shapePitch}
-              onChange={(e) => setShapePitch(Number(e.target.value))}
-            />
-            <span className="phase-val">{shapePitch}°</span>
-          </label>
-          <label>
-            крен Y
-            <input
-              type="range"
-              min={-180}
-              max={180}
-              value={shapeRoll}
-              onChange={(e) => setShapeRoll(Number(e.target.value))}
-            />
-            <span className="phase-val">{shapeRoll}°</span>
-          </label>
-          <label>
-            масштаб XY
-            <input
-              type="range"
-              min={0.05}
-              max={4}
-              step={0.05}
-              value={shapeScale}
-              onChange={(e) => setShapeScale(Number(e.target.value))}
-            />
-            <span className="phase-val">{shapeScale.toFixed(2)}</span>
-          </label>
-          <label>
-            масштаб Z
-            <input
-              type="range"
-              min={0.05}
-              max={4}
-              step={0.05}
-              value={shapeScaleZ}
-              onChange={(e) => setShapeScaleZ(Number(e.target.value))}
-            />
-            <span className="phase-val">{shapeScaleZ.toFixed(2)}</span>
-          </label>
-          <Hint>
-            Загрузите <code>.c3d</code> или <code>.m3d</code> (в игре — папки{' '}
-            <code>shape3d\</code> и <code>resource\m3d\</code>; <code>.m3d</code> начинается
-            с той же модели, что и <code>.c3d</code>). Модель проецируется сверху в
-            отпечаток, который штампуется в рельеф инструментом <b>«3D-модель»</b>{' '}
-            (выбирается автоматически при загрузке).
-            <br />
-            Наведите на карту — пунктирный квадрат показывает отпечаток; <b>ЛКМ</b> —
-            вставить. <b>режим</b>: map (заменить), max/min (только выше/ниже), mean
-            (среднее), add (прибавить); <b>уровень</b> — сдвиг высоты; <b>сторона</b> — верх
-            или низ модели; <b>инверсия</b> — вывернуть.
-            <br />
-            Поворот по Z/X/Y, масштаб XY/Z и шум применяются до вставки.
-          </Hint>
-        </div>
+            {tab === 'shape' && editTool === 'shape' && (
+              <>
+                <Group label="Модель">
+                  <label>
+                    файл (.c3d/.m3d)
+                    <input
+                      type="file"
+                      accept=".c3d,.m3d"
+                      onChange={(e) => {
+                        const f = e.target.files?.[0];
+                        e.target.value = '';
+                        if (!f) return;
+                        void (async () => {
+                          try {
+                            const model = loadC3D(await readFile(f));
+                            setShapeModel(model);
+                            setEditTool('shape');
+                            setStatus(
+                              `${f.name}: ${model.numPoly} полигонов, ${model.numVert} вершин.`,
+                            );
+                          } catch (err) {
+                            console.error(err);
+                            setStatus('Ошибка модели: ' + (err as Error).message);
+                          }
+                        })();
+                      }}
+                    />
+                  </label>
+                  <span className="phase-val" title="Размер отпечатка модели в вокселях">
+                    {shapeModel
+                      ? `${shapeInfo?.size ?? '—'}×${shapeInfo?.size ?? '—'}`
+                      : 'не загружена'}
+                  </span>
+                  <Hint>
+                    Загрузите <code>.c3d</code> или <code>.m3d</code> (в игре — папки{' '}
+                    <code>shape3d\</code> и <code>resource\m3d\</code>; <code>.m3d</code>{' '}
+                    начинается с той же модели, что и <code>.c3d</code>). Модель проецируется сверху
+                    в отпечаток, который штампуется в рельеф инструментом <b>«3D-модель»</b>{' '}
+                    (выбирается автоматически при загрузке).
+                    <br />
+                    Наведите на карту — под курсором видно превью отпечатка; <b>ЛКМ</b> — вставить.
+                  </Hint>
+                </Group>
+                <Group label="Отпечаток">
+                  <label>
+                    режим
+                    <select value={shapeMode} onChange={(e) => setShapeMode(Number(e.target.value))}>
+                      <option value={0}>map</option>
+                      <option value={1}>max</option>
+                      <option value={2}>min</option>
+                      <option value={3}>mean</option>
+                      <option value={4}>add</option>
+                    </select>
+                  </label>
+                  <label>
+                    уровень
+                    <input
+                      type="range"
+                      min={0}
+                      max={255}
+                      value={shapeLevel}
+                      onChange={(e) => setShapeLevel(Number(e.target.value))}
+                    />
+                    <span className="phase-val">{shapeLevel}</span>
+                  </label>
+                  <label>
+                    сторона
+                    <select
+                      value={shapeSide}
+                      onChange={(e) => setShapeSide(e.target.value as 'up' | 'down')}
+                    >
+                      <option value="up">верх</option>
+                      <option value="down">низ</option>
+                    </select>
+                  </label>
+                  <label>
+                    инверсия
+                    <input
+                      type="checkbox"
+                      checked={shapeInverse}
+                      onChange={(e) => setShapeInverse(e.target.checked)}
+                    />
+                  </label>
+                </Group>
+                <Group label="Шум">
+                  <label>
+                    шум %
+                    <input
+                      type="range"
+                      min={0}
+                      max={100}
+                      value={shapeNoiseLevel}
+                      onChange={(e) => setShapeNoiseLevel(Number(e.target.value))}
+                    />
+                    <span className="phase-val">{shapeNoiseLevel}</span>
+                  </label>
+                  <label>
+                    амп
+                    <input
+                      type="range"
+                      min={0}
+                      max={64}
+                      value={shapeNoiseAmp}
+                      onChange={(e) => setShapeNoiseAmp(Number(e.target.value))}
+                    />
+                    <span className="phase-val">{shapeNoiseAmp}</span>
+                  </label>
+                </Group>
+                <Group label="Поворот">
+                  <label>
+                    поворот Z
+                    <input
+                      type="range"
+                      min={-180}
+                      max={180}
+                      value={shapeYaw}
+                      onChange={(e) => setShapeYaw(Number(e.target.value))}
+                    />
+                    <span className="phase-val">{shapeYaw}°</span>
+                  </label>
+                  <label>
+                    наклон X
+                    <input
+                      type="range"
+                      min={-180}
+                      max={180}
+                      value={shapePitch}
+                      onChange={(e) => setShapePitch(Number(e.target.value))}
+                    />
+                    <span className="phase-val">{shapePitch}°</span>
+                  </label>
+                  <label>
+                    крен Y
+                    <input
+                      type="range"
+                      min={-180}
+                      max={180}
+                      value={shapeRoll}
+                      onChange={(e) => setShapeRoll(Number(e.target.value))}
+                    />
+                    <span className="phase-val">{shapeRoll}°</span>
+                  </label>
+                </Group>
+                <Group label="Масштаб">
+                  <label>
+                    масштаб XY
+                    <input
+                      type="range"
+                      min={0.05}
+                      max={4}
+                      step={0.05}
+                      value={shapeScale}
+                      onChange={(e) => setShapeScale(Number(e.target.value))}
+                    />
+                    <span className="phase-val">{shapeScale.toFixed(2)}</span>
+                  </label>
+                  <label>
+                    масштаб Z
+                    <input
+                      type="range"
+                      min={0.05}
+                      max={4}
+                      step={0.05}
+                      value={shapeScaleZ}
+                      onChange={(e) => setShapeScaleZ(Number(e.target.value))}
+                    />
+                    <span className="phase-val">{shapeScaleZ.toFixed(2)}</span>
+                  </label>
+                </Group>
+              </>
+            )}
+          </div>
         )}
       </header>
 
