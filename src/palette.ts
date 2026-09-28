@@ -17,6 +17,16 @@ export interface Palette {
   rgba: Uint8ClampedArray;
 }
 
+/** One record of the world's `Dynamic Palette` section. */
+export interface PaletteCycle {
+  terrain: number;
+  speed: number;
+  ampl: number;
+  red: number;
+  green: number;
+  blue: number;
+}
+
 export function buildPalette(
   paletteFile: Uint8Array,
   beginColors: number[],
@@ -49,6 +59,34 @@ export function buildPalette(
   }
 
   return { rgb, rgba: toRgba(rgb) };
+}
+
+/**
+ * Applies one `Dynamic Palette` record to a base palette (the original
+ * `pal_iter2` colour shift, taken at peak amplitude `sin = 1` and without the
+ * per-frame time step). Only the channels flagged in the record are shifted,
+ * within the record's terrain colour range, clamped to the 0..63 range.
+ */
+export function applyPaletteCycle(
+  base: Palette,
+  cycle: PaletteCycle,
+  beginColors: number[],
+  endColors: number[],
+): Palette {
+  const rgb = base.rgb.slice();
+  const beg = beginColors[cycle.terrain];
+  const end = endColors[cycle.terrain];
+  const add = cycle.ampl;
+  for (let i = beg; i <= end; i++) {
+    if (cycle.red) rgb[3 * i + 0] = clamp6(rgb[3 * i + 0] + add);
+    if (cycle.green) rgb[3 * i + 1] = clamp6(rgb[3 * i + 1] + add);
+    if (cycle.blue) rgb[3 * i + 2] = clamp6(rgb[3 * i + 2] + add);
+  }
+  return { rgb, rgba: toRgba(rgb) };
+}
+
+function clamp6(v: number): number {
+  return v < 0 ? 0 : v > 63 ? 63 : v;
 }
 
 /** XGR_SetPal: 6-bit -> 8-bit, expands to an RGBA LUT. */

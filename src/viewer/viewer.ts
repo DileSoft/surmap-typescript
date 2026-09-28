@@ -80,6 +80,12 @@ export class Viewer {
     this.draw();
   }
 
+  /** Swaps the palette (e.g. after applying a Dynamic Palette cycle) and redraws. */
+  setPalette(palette: Palette): void {
+    this.palette = palette;
+    this.draw();
+  }
+
   fit(): void {
     if (!this.map) return;
     this.scale = Math.min(this.canvas.width / this.map.sizeX, this.canvas.height / this.map.sizeY);

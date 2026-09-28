@@ -7,6 +7,13 @@
 import { H_SIZE, MAP_POWER_X, TERRAIN_MAX } from './constants';
 import { VmcDecoder } from './huffman';
 import { iniGet, iniGetInt, parseIntList, parseIni, type Ini } from './ini';
+import type { PaletteCycle } from './palette';
+
+export interface DynamicPalette {
+  /** Terrain index animated by `pal_iter0/1` (wave), or -1. */
+  waveTerrain: number;
+  cycles: PaletteCycle[];
+}
 
 export interface WorldConfig {
   mapPowerX: number;
@@ -20,6 +27,7 @@ export interface WorldConfig {
   paletteFile: string;
   beginColors: number[];
   endColors: number[];
+  dynamicPalette: DynamicPalette;
   version: string;
 }
 
@@ -48,6 +56,26 @@ export function parseWorldConfig(iniText: string): WorldConfig {
     throw new Error(`Incorrect Terrain Max ${terrainMax}`);
   }
 
+  // Dynamic Palette: a list of terrain colour cycles (pal_iter2).
+  const cycleCount = iniGetInt(ini, 'Dynamic Palette', 'Terrain Number', 0);
+  const terrains = parseIntList(iniGet(ini, 'Dynamic Palette', 'Terrains'), cycleCount);
+  const speeds = parseIntList(iniGet(ini, 'Dynamic Palette', 'Speeds'), cycleCount);
+  const ampls = parseIntList(iniGet(ini, 'Dynamic Palette', 'Amplitudes'), cycleCount);
+  const reds = parseIntList(iniGet(ini, 'Dynamic Palette', 'Red'), cycleCount);
+  const greens = parseIntList(iniGet(ini, 'Dynamic Palette', 'Green'), cycleCount);
+  const blues = parseIntList(iniGet(ini, 'Dynamic Palette', 'Blue'), cycleCount);
+  const cycles: PaletteCycle[] = [];
+  for (let i = 0; i < cycleCount; i++) {
+    cycles.push({
+      terrain: terrains[i],
+      speed: speeds[i],
+      ampl: ampls[i],
+      red: reds[i],
+      green: greens[i],
+      blue: blues[i],
+    });
+  }
+
   return {
     mapPowerX,
     mapPowerY: iniGetInt(ini, 'Global Parameters', 'Map Power Y', 0),
@@ -60,6 +88,10 @@ export function parseWorldConfig(iniText: string): WorldConfig {
     paletteFile: iniGet(ini, 'Storage', 'Palette File') ?? '',
     beginColors: parseIntList(iniGet(ini, 'Rendering Parameters', 'Begin Colors'), TERRAIN_MAX),
     endColors: parseIntList(iniGet(ini, 'Rendering Parameters', 'End Colors'), TERRAIN_MAX),
+    dynamicPalette: {
+      waveTerrain: iniGetInt(ini, 'Dynamic Palette', 'Wave Terrain', -1),
+      cycles,
+    },
     version,
   };
 }

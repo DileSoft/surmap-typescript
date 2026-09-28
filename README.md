@@ -16,6 +16,7 @@
 | Базовый цвет поверхности (`LINE_render`) | `src/terra/land.cpp` |
 | Тени поверхности (`regRender`: PreStage / MainStage / post) | `src/terra/siderend.cpp` |
 | Палитра (`PalettePrepare`, `XGR_SetPal`) | `src/road.cpp` |
+| Dynamic Palette: выбор записи цикла (статически) | `src/palette.cpp` (`pal_iter2`), `src/terra/vmap.cpp` (`analyzeINI`) |
 
 Не портировано (вне выбранного объёма): камера (`scaling`, `turning`, `scaling_3D`,
 `PerpSlopTurn`/`SlopTurnSkip`), объекты, частицы, динамическая палитра (`pal_iter2`).
@@ -89,5 +90,7 @@ Vitest загружает `data/thechain/fostral`, декодирует 16384 с
 - Панель объектов палитры (`> ENDCOLOR[last]`, файл `objects.pal`) подставляется,
   только если передан соответствующий файл; для террейна нужны индексы
   `Begin..End Color`.
-- Динамическая палитра (анимация воды/лавы, `pal_iter2`) не реализована —
-  используется статичная палитра.
+- Динамическая палитра: селектор «цикл» применяет выбранную запись секции
+  `Dynamic Palette` мира (сдвиг каналов выбранного террейна) **статически** —
+  анимация по времени (`pal_iter0/1/2`) не воспроизводится. Сдвиг берётся при
+  пиковой амплитуде (`sin = 1`).

@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
-import { loadPalette, loadVmc, loadVmp, loadVpr, parseWorldConfig } from './loader';
+import { loadPalette, loadVmc, loadVmp, loadVpr, parseWorldConfig, type WorldConfig } from './loader';
 import { renderPrepare } from './luts';
-import { buildPalette } from './palette';
+import { applyPaletteCycle, buildPalette, type Palette, type PaletteCycle } from './palette';
 import { VrtMap } from './vmap';
 import { Viewer, type DebugMode, type RenderMode } from './viewer/viewer';
 
@@ -36,6 +36,11 @@ export default function App() {
   const [cursor, setCursor] = useState('');
   const [renderMode, setRenderMode] = useState<RenderMode>('reg');
   const [debug, setDebug] = useState<DebugMode>('color');
+
+  const [config, setConfig] = useState<WorldConfig | null>(null);
+  const [basePalette, setBasePalette] = useState<Palette | null>(null);
+  const [cycles, setCycles] = useState<PaletteCycle[]>([]);
+  const [cycleSel, setCycleSel] = useState(0); // 0 = original, i+1 = cycles[i]
 
   // Create the viewer once the canvas exists.
   useEffect(() => {
@@ -72,11 +77,26 @@ export default function App() {
     const nextMap = new VrtMap(level, luts);
 
     setMap(nextMap);
+    setConfig(config);
+    setBasePalette(palette);
+    setCycles(config.dynamicPalette.cycles);
+    setCycleSel(0);
     if (import.meta.env.DEV) {
       (window as unknown as { __map?: VrtMap }).__map = nextMap;
     }
     viewerRef.current?.setData(nextMap, palette);
     setStatus(`Готово: ${level.sizeX}x${level.sizeY}, декод ${tDecode.toFixed(0)} мс.`);
+  }
+
+  /** Applies the selected Dynamic Palette record statically (no animation). */
+  function selectCycle(sel: number) {
+    setCycleSel(sel);
+    if (!basePalette || !config) return;
+    const palette =
+      sel === 0
+        ? basePalette
+        : applyPaletteCycle(basePalette, cycles[sel - 1], config.beginColors, config.endColors);
+    viewerRef.current?.setPalette(palette);
   }
 
   /** Loads a world from an arbitrary set of selected files, matched by extension. */
@@ -181,6 +201,22 @@ export default function App() {
             <option value="shadow">SHADOW</option>
             <option value="objshadow">OBJSHADOW</option>
             <option value="doublebits">DOUBLE бит</option>
+          </select>
+        </label>
+
+        <label>
+          цикл
+          <select
+            value={cycleSel}
+            disabled={cycles.length === 0}
+            onChange={(e) => selectCycle(Number(e.target.value))}
+          >
+            <option value={0}>оригинал</option>
+            {cycles.map((c, i) => (
+              <option key={i} value={i + 1}>
+                {`цикл ${i + 1}: террейн ${c.terrain} (R${c.red} G${c.green} B${c.blue}, ампл ${c.ampl})`}
+              </option>
+            ))}
           </select>
         </label>
 

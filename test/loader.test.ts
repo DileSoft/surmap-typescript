@@ -16,7 +16,7 @@ import { describe, expect, test } from 'vitest';
 import { loadPalette, loadVmc, loadVpr, parseWorldConfig } from '../src/loader';
 import { renderPrepare } from '../src/luts';
 import { VrtMap } from '../src/vmap';
-import { buildPalette } from '../src/palette';
+import { applyPaletteCycle, buildPalette } from '../src/palette';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const dataDir = process.env.VANGERS_WORLD || path.resolve(__dirname, '../../Vangers/data/thechain/fostral');
@@ -79,6 +79,36 @@ function writePng(file: string, width: number, height: number, rgb: Buffer): voi
   fs.writeFileSync(file, Buffer.concat(chunks));
 }
 
+describe('palette cycle', () => {
+  test('shifts only flagged channels within the terrain range', () => {
+    const rgb = new Uint8Array(768).fill(10);
+    const begin = [1, 32, 64, 72, 88, 104, 112, 120];
+    const end = [31, 63, 71, 87, 103, 111, 119, 127];
+    const base = buildPalette(rgb, begin, end);
+    const out = applyPaletteCycle(
+      base,
+      { terrain: 1, speed: 0, ampl: 20, red: 1, green: 0, blue: 0 },
+      begin,
+      end,
+    );
+    // index 40 (inside terrain 1 range): red shifted by +20, green/blue intact
+    expect(out.rgb[3 * 40 + 0]).toBe(base.rgb[3 * 40 + 0] + 20);
+    expect(out.rgb[3 * 40 + 1]).toBe(base.rgb[3 * 40 + 1]);
+    expect(out.rgb[3 * 40 + 2]).toBe(base.rgb[3 * 40 + 2]);
+    // index 70 (inside terrain 2 range): untouched
+    expect(out.rgb[3 * 70 + 0]).toBe(base.rgb[3 * 70 + 0]);
+    // saturation at 63
+    const base2 = buildPalette(new Uint8Array(768).fill(60), begin, end);
+    const out2 = applyPaletteCycle(
+      base2,
+      { terrain: 1, speed: 0, ampl: 20, red: 1, green: 0, blue: 0 },
+      begin,
+      end,
+    );
+    expect(out2.rgb[3 * 40 + 0]).toBe(63);
+  });
+});
+
 describe('fostral world', () => {
   test.skipIf(!available)('decodes VMC, renders surface and matches hashes', { timeout: 120_000 }, () => {
     fs.mkdirSync(outDir, { recursive: true });
@@ -86,6 +116,10 @@ describe('fostral world', () => {
 
     const config = parseWorldConfig(fs.readFileSync(path.join(dataDir, 'world.ini'), 'utf8'));
     expect(config.isCompressed).toBe(true);
+    expect(config.dynamicPalette.waveTerrain).toBe(0);
+    expect(config.dynamicPalette.cycles.map((c) => c.terrain)).toEqual([5, 4, 6]);
+    expect(config.dynamicPalette.cycles.map((c) => c.ampl)).toEqual([32, 8, 32]);
+    expect(config.dynamicPalette.cycles.map((c) => c.speed)).toEqual([128, 128, 256]);
 
     // Throws on any per-line byte-boundary mismatch.
     const level = loadVmc(read(`${config.fileName}.vmc`), config);
