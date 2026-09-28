@@ -3,7 +3,13 @@ import { loadPalette, loadVmc, loadVmp, loadVpr, parseWorldConfig, type WorldCon
 import { renderPrepare } from './luts';
 import { applyPaletteCycle, applyWaveCycle, buildPalette, type Palette } from './palette';
 import { saveVmc, saveVmp } from './save';
-import { loadC3D, projectShape, stampShape, type C3DModel, type ShapeOptions } from './shape';
+import {
+  loadC3D,
+  projectionPreview,
+  projectShape,
+  type C3DModel,
+  type ShapeOptions,
+} from './shape';
 import { VrtMap } from './vmap';
 import { Viewer, type DebugMode, type EditTool, type RenderMode } from './viewer/viewer';
 
@@ -147,6 +153,8 @@ export default function App() {
   const [editStrength, setEditStrength] = useState(8);
   const [editSmooth, setEditSmooth] = useState(5);
   const [saveFormat, setSaveFormat] = useState<'vmc' | 'vmp'>('vmp');
+  const [canUndo, setCanUndo] = useState(false);
+  const [canRedo, setCanRedo] = useState(false);
 
   const [shapeModel, setShapeModel] = useState<C3DModel | null>(null);
   const [shapeMode, setShapeMode] = useState(0);
@@ -200,12 +208,21 @@ export default function App() {
     return { x: p.shapeX, y: p.shapeY, size: p.size };
   }, [shapeModel, shapeOpts]);
 
+  const shapePreview = useMemo(() => {
+    if (!shapeModel || !shapeOpts) return null;
+    return projectionPreview(projectShape(shapeModel, shapeOpts, 0, 0), shapeOpts);
+  }, [shapeModel, shapeOpts]);
+
   useEffect(() => {
     if (!canvasRef.current) return;
     const viewer = new Viewer(canvasRef.current, {
       onInfo: setInfo,
       onCursor: setCursor,
       onShapePlace: (x, y) => placeShapeRef.current(x, y),
+      onHistoryChange: (u, r) => {
+        setCanUndo(u);
+        setCanRedo(r);
+      },
     });
     viewerRef.current = viewer;
     return () => {
@@ -231,17 +248,39 @@ export default function App() {
       smode: 0,
       equDelta: 5,
       shapeFootprint: shapeInfo,
+      shapePreview: editTool === 'shape' ? shapePreview : null,
     });
-  }, [editTool, editRadius, editStrength, editSmooth, shapeInfo]);
+  }, [editTool, editRadius, editStrength, editSmooth, shapeInfo, shapePreview]);
 
   /** Stamps the loaded 3D model at a clicked voxel. */
   function placeShape(x: number, y: number) {
     if (!map || !shapeModel || !shapeOpts) return;
-    const region = stampShape(map, shapeModel, shapeOpts, x, y);
-    viewerRef.current?.refreshRegion(region.lowX, region.lowY, region.hiX, region.hiY);
-    setStatus(`3D-модель вставлена в (${x},${y}), ${shapeInfo?.size ?? 0}x${shapeInfo?.size ?? 0}.`);
+    viewerRef.current?.stampShapeAt(shapeModel, shapeOpts, x, y);
+    setStatus(`3D-модель вставлена в (${x},${y}), ${shapeInfo?.size ?? 0}×${shapeInfo?.size ?? 0}.`);
   }
   placeShapeRef.current = placeShape;
+
+  // Ctrl+Z / Ctrl+Shift+Z / Ctrl+Y — undo/redo.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (!(e.ctrlKey || e.metaKey)) return;
+      const t = e.target as HTMLElement | null;
+      if (t && (t.tagName === 'INPUT' || t.tagName === 'SELECT' || t.tagName === 'TEXTAREA')) {
+        return;
+      }
+      if (e.key === 'z' || e.key === 'Z') {
+        e.preventDefault();
+        if (e.shiftKey) viewerRef.current?.redo();
+        else viewerRef.current?.undo();
+      } else if (e.key === 'y' || e.key === 'Y') {
+        e.preventDefault();
+        viewerRef.current?.redo();
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, []);
+
 
   async function buildAndShow(
     cfg: WorldConfig,
@@ -566,6 +605,12 @@ export default function App() {
           <button disabled={!map} onClick={() => viewerRef.current?.resetEdits()}>
             сбросить рельеф
           </button>
+          <button disabled={!canUndo} onClick={() => viewerRef.current?.undo()} title="Ctrl+Z">
+            ↶ undo
+          </button>
+          <button disabled={!canRedo} onClick={() => viewerRef.current?.redo()} title="Ctrl+Y">
+            ↷ redo
+          </button>
           <label>
             формат
             <select
@@ -597,6 +642,7 @@ export default function App() {
           </Hint>
         </div>
 
+        {editTool === 'shape' && (
         <div className="row">
           <span className="row-label">3D-модель</span>
           <label>
@@ -758,6 +804,7 @@ export default function App() {
             Поворот по Z/X/Y, масштаб XY/Z и шум применяются до вставки.
           </Hint>
         </div>
+        )}
       </header>
 
       <div id="status">{status}</div>

@@ -5,6 +5,13 @@
  */
 import { DOUBLE_LEVEL, OBJSHADOW, SHADOW_MASK, TERRAIN_MASK, TERRAIN_OFFSET } from '../constants';
 import type { Palette } from '../palette';
+import {
+  projectShape,
+  regionOf,
+  stampProjection,
+  type C3DModel,
+  type ShapeOptions,
+} from '../shape';
 import type { VrtMap } from '../vmap';
 
 export type RenderMode = 'line' | 'reg';
@@ -34,13 +41,35 @@ export interface EditOptions {
   equDelta: number;
   /** Footprint of the loaded 3D shape (for the placement preview). */
   shapeFootprint?: { x: number; y: number; size: number } | null;
+  /** Translucent preview bitmap of the projected shape. */
+  shapePreview?: {
+    x: number;
+    y: number;
+    size: number;
+    rgba: Uint8ClampedArray;
+  } | null;
 }
 
 export interface ViewerCallbacks {
   onInfo?: (text: string) => void;
   onCursor?: (text: string) => void;
   onShapePlace?: (x: number, y: number) => void;
+  onHistoryChange?: (canUndo: boolean, canRedo: boolean) => void;
 }
+
+interface HistoryEntry {
+  lowX: number;
+  lowY: number;
+  hiX: number;
+  hiY: number;
+  w: number;
+  h: number;
+  height: Uint8Array;
+  meta: Uint8Array;
+}
+
+/** Cap undo+redo memory so long editing sessions stay bounded. */
+const HISTORY_BUDGET = 128 * 1024 * 1024;
 
 type DragMode = 'none' | 'pan' | 'paint';
 
@@ -52,6 +81,12 @@ export class Viewer {
   private tag = 0;
   private renderedRows = new Int16Array(0);
   private lastImage: ImageData | null = null;
+
+  private undoStack: HistoryEntry[] = [];
+  private redoStack: HistoryEntry[] = [];
+  private historyBytes = 0;
+  private previewSrc: EditOptions['shapePreview'] = null;
+  private previewCanvas: HTMLCanvasElement | null = null;
 
   scale = 1;
   offsetX = 0;
@@ -100,6 +135,10 @@ export class Viewer {
     this.palette = palette;
     this.renderedRows = new Int16Array(map.sizeY);
     this.tag = 0;
+    this.undoStack = [];
+    this.redoStack = [];
+    this.historyBytes = 0;
+    this.cb.onHistoryChange?.(false, false);
     this.fit();
   }
 
@@ -127,6 +166,10 @@ export class Viewer {
   setEdit(edit: EditOptions): void {
     this.edit = { ...edit };
     this.canvas.style.cursor = this.edit.tool === 'off' ? 'grab' : 'crosshair';
+    if (edit.shapePreview !== this.previewSrc) {
+      this.previewSrc = edit.shapePreview ?? null;
+      this.rebuildPreview();
+    }
     if (this.edit.tool === 'off') {
       this.drag = 'none';
       this.stopPaintLoop();
@@ -140,9 +183,126 @@ export class Viewer {
     }
   }
 
+  private rebuildPreview(): void {
+    const src = this.previewSrc;
+    if (!src) {
+      this.previewCanvas = null;
+      return;
+    }
+    const canvas = document.createElement('canvas');
+    canvas.width = src.size;
+    canvas.height = src.size;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+    const img = ctx.createImageData(src.size, src.size);
+    img.data.set(src.rgba);
+    ctx.putImageData(img, 0, 0);
+    this.previewCanvas = canvas;
+  }
+
+  // --- undo / redo ---------------------------------------------------------
+
+  canUndo(): boolean {
+    return this.undoStack.length > 0;
+  }
+
+  canRedo(): boolean {
+    return this.redoStack.length > 0;
+  }
+
+  undo(): void {
+    const entry = this.undoStack.pop();
+    if (!entry || !this.map) return;
+    const redo = this.snapshotRegion(entry.lowX, entry.lowY, entry.hiX, entry.hiY);
+    this.restoreRegion(entry);
+    this.redoStack.push(redo);
+    this.trimHistory();
+    this.refreshRegion(entry.lowX, entry.lowY, entry.hiX, entry.hiY);
+    this.cb.onHistoryChange?.(this.canUndo(), this.canRedo());
+  }
+
+  redo(): void {
+    const entry = this.redoStack.pop();
+    if (!entry || !this.map) return;
+    const undo = this.snapshotRegion(entry.lowX, entry.lowY, entry.hiX, entry.hiY);
+    this.restoreRegion(entry);
+    this.undoStack.push(undo);
+    this.trimHistory();
+    this.refreshRegion(entry.lowX, entry.lowY, entry.hiX, entry.hiY);
+    this.cb.onHistoryChange?.(this.canUndo(), this.canRedo());
+  }
+
+  private pushHistory(lowX: number, lowY: number, hiX: number, hiY: number): void {
+    if (!this.map) return;
+    this.redoStack = [];
+    this.undoStack.push(this.snapshotRegion(lowX, lowY, hiX, hiY));
+    this.trimHistory();
+    this.cb.onHistoryChange?.(this.canUndo(), this.canRedo());
+  }
+
+  private snapshotRegion(lowX: number, lowY: number, hiX: number, hiY: number): HistoryEntry {
+    const map = this.map!;
+    const w = hiX - lowX + 1;
+    const h = hiY - lowY + 1;
+    const height = new Uint8Array(w * h);
+    const meta = new Uint8Array(w * h);
+    const clipX = map.sizeX - 1;
+    const clipY = map.sizeY - 1;
+    for (let j = 0; j < h; j++) {
+      const rowBase = ((lowY + j) & clipY) * map.sizeX;
+      for (let i = 0; i < w; i++) {
+        const idx = rowBase + ((lowX + i) & clipX);
+        height[j * w + i] = map.height[idx];
+        meta[j * w + i] = map.meta[idx];
+      }
+    }
+    this.historyBytes += height.length + meta.length;
+    return { lowX, lowY, hiX, hiY, w, h, height, meta };
+  }
+
+  private restoreRegion(entry: HistoryEntry): void {
+    const map = this.map!;
+    const clipX = map.sizeX - 1;
+    const clipY = map.sizeY - 1;
+    for (let j = 0; j < entry.h; j++) {
+      const rowBase = ((entry.lowY + j) & clipY) * map.sizeX;
+      for (let i = 0; i < entry.w; i++) {
+        const idx = rowBase + ((entry.lowX + i) & clipX);
+        map.height[idx] = entry.height[j * entry.w + i];
+        map.meta[idx] = entry.meta[j * entry.w + i];
+      }
+    }
+  }
+
+  private trimHistory(): void {
+    const size = (e: HistoryEntry) => e.height.length + e.meta.length;
+    while (
+      this.historyBytes > HISTORY_BUDGET ||
+      this.undoStack.length + this.redoStack.length > 200
+    ) {
+      const drop = this.undoStack.shift() ?? this.redoStack.shift();
+      if (!drop) break;
+      this.historyBytes -= size(drop);
+    }
+  }
+
+  /** Stamps the loaded 3D model at a voxel, recording history. */
+  stampShapeAt(model: C3DModel, opts: ShapeOptions, x: number, y: number): void {
+    const map = this.map;
+    if (!map) return;
+    const proj = projectShape(model, opts, x, y);
+    const region = regionOf(proj);
+    this.pushHistory(region.lowX, region.lowY, region.hiX, region.hiY);
+    stampProjection(map, proj, opts);
+    this.refreshRegion(region.lowX, region.lowY, region.hiX, region.hiY);
+  }
+
   /** Undoes all terrain edits (heights + flags) and redraws. */
   resetEdits(): void {
-    this.map?.resetAll();
+    const map = this.map;
+    if (!map) return;
+    this.pushHistory(0, 0, map.sizeX - 1, map.sizeY - 1);
+    map.resetAll();
     this.tag++;
     this.draw();
   }
@@ -222,6 +382,7 @@ export class Viewer {
           ? -this.edit.strength
           : 0;
     const eql = this.edit.tool === 'smooth' ? this.edit.equDelta : 0;
+    this.pushHistory(x - rad, y - rad, x + rad, y + rad);
     map.deltaZone(x, y, rad, this.edit.smooth, dh, this.edit.smode, eql);
     this.refreshRegion(x - rad, y - rad, x + rad, y + rad);
   }
@@ -322,10 +483,18 @@ export class Viewer {
     ctx.lineWidth = 1;
 
     if (this.edit.tool === 'shape') {
-      const fp = this.edit.shapeFootprint;
+      const pv = this.previewSrc;
+      const fp = this.edit.shapeFootprint ?? pv;
       const sx = (x + (fp?.x ?? 0) - this.offsetX) * this.scale;
       const sy = (y + (fp?.y ?? 0) - this.offsetY) * this.scale;
       const sw = Math.max(1, (fp?.size ?? this.edit.radius * 2) * this.scale);
+      if (pv && this.previewCanvas) {
+        ctx.save();
+        ctx.imageSmoothingEnabled = false;
+        ctx.globalAlpha = 0.75;
+        ctx.drawImage(this.previewCanvas, sx, sy, sw, sw);
+        ctx.restore();
+      }
       ctx.strokeStyle = 'rgba(255,140,220,0.95)';
       ctx.strokeRect(sx, sy, sw, sw);
       ctx.beginPath();

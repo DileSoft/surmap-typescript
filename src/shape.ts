@@ -408,6 +408,27 @@ export function stampShape(
   yOff: number,
 ): { lowX: number; lowY: number; hiX: number; hiY: number } {
   const proj = projectShape(model, opts, xOff, yOff);
+  stampProjection(map, proj, opts);
+  return regionOf(proj);
+}
+
+/** Inclusive unwrapped region covered by a projection. */
+export function regionOf(proj: ShapeProjection): {
+  lowX: number;
+  lowY: number;
+  hiX: number;
+  hiY: number;
+} {
+  return {
+    lowX: proj.shapeX,
+    lowY: proj.shapeY,
+    hiX: proj.shapeX + proj.size - 1,
+    hiY: proj.shapeY + proj.size - 1,
+  };
+}
+
+/** Stamps an already-projected model into the terrain (`S3Danalyze`). */
+export function stampProjection(map: VrtMap, proj: ShapeProjection, opts: ShapeOptions): void {
   const { size, shift, shapeX, shapeY } = proj;
   const surface = opts.side ? proj.lower : proj.upper;
   const empty = opts.side ? 255 : 0;
@@ -460,6 +481,30 @@ export function stampShape(
       map.pixSet(xx, yy, vv - h);
     }
   }
-
-  return { lowX: shapeX, lowY: shapeY, hiX: shapeX + size - 1, hiY: shapeY + size - 1 };
 }
+
+/** Builds a translucent preview bitmap (usable `size`x`size` footprint). */
+export function projectionPreview(
+  proj: ShapeProjection,
+  opts: ShapeOptions,
+): { x: number; y: number; size: number; rgba: Uint8ClampedArray } {
+  const { size, shift } = proj;
+  const stride = 1 << shift;
+  const surface = opts.side ? proj.lower : proj.upper;
+  const empty = opts.side ? 255 : 0;
+  const rgba = new Uint8ClampedArray(size * size * 4);
+  for (let j = 0; j < size; j++) {
+    for (let i = 0; i < size; i++) {
+      const v = surface[j * stride + i];
+      if (v === empty) continue;
+      const t = v / 255;
+      const di = (j * size + i) * 4;
+      rgba[di] = 70 + 185 * t;
+      rgba[di + 1] = 90 + 150 * t;
+      rgba[di + 2] = 235 - 180 * t;
+      rgba[di + 3] = 200;
+    }
+  }
+  return { x: proj.shapeX, y: proj.shapeY, size, rgba };
+}
+
