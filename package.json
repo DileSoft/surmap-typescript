@@ -1,0 +1,16 @@
+{
+  "name": "surmap-typescript",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Exact TypeScript/Canvas port of Vangers terrain (VMP/VMC) surface rendering",
+  "scripts": {
+    "build": "tsc",
+    "watch": "tsc -w",
+    "serve": "node server.mjs",
+    "test": "node test/loader.test.mjs"
+  },
+  "devDependencies": {
+    "typescript": "^5.6.3"
+  }
+}

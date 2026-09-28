@@ -1,0 +1,98 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Vangers VMP/VMC surface — TypeScript/Canvas</title>
+    <style>
+      :root {
+        color-scheme: dark;
+      }
+      body {
+        margin: 0;
+        background: #10131a;
+        color: #d6dae2;
+        font: 13px/1.4 ui-monospace, Consolas, monospace;
+      }
+      header {
+        padding: 8px 12px;
+        background: #171b24;
+        border-bottom: 1px solid #2a3040;
+        display: flex;
+        flex-wrap: wrap;
+        gap: 10px;
+        align-items: center;
+      }
+      label {
+        display: inline-flex;
+        gap: 4px;
+        align-items: center;
+        white-space: nowrap;
+      }
+      button,
+      select,
+      input[type='file'] {
+        background: #202634;
+        color: #d6dae2;
+        border: 1px solid #39415a;
+        border-radius: 5px;
+        padding: 3px 7px;
+        font: inherit;
+      }
+      #view {
+        display: block;
+        margin: 8px;
+        background: #000;
+        border: 1px solid #2a3040;
+        cursor: grab;
+        image-rendering: pixelated;
+      }
+      #status,
+      #info,
+      #cursor {
+        padding: 2px 12px;
+        color: #9aa4b8;
+      }
+      .hint {
+        color: #6d768a;
+        padding: 2px 12px;
+      }
+    </style>
+  </head>
+  <body>
+    <header>
+      <label>world.ini <input id="ini" type="file" accept=".ini,.txt" /></label>
+      <label>data <input id="data" type="file" accept=".vmp,.vmc" /></label>
+      <label>.vpr <input id="vpr" type="file" accept=".vpr" /></label>
+      <label>.pal <input id="pal" type="file" accept=".pal" /></label>
+      <button id="load">Загрузить</button>
+      <label>
+        рендер
+        <select id="renderMode">
+          <option value="reg" selected>regRender (тени)</option>
+          <option value="line">LINE_render</option>
+        </select>
+      </label>
+      <label>
+        вид
+        <select id="debug">
+          <option value="color" selected>цвет</option>
+          <option value="heights">высоты</option>
+          <option value="double">double level</option>
+          <option value="terrain">террейн</option>
+          <option value="shadow">SHADOW</option>
+          <option value="objshadow">OBJSHADOW</option>
+          <option value="doublebits">DOUBLE бит</option>
+        </select>
+      </label>
+      <button id="fit">Fit</button>
+    </header>
+    <div id="status"></div>
+    <div id="info"></div>
+    <div id="cursor"></div>
+    <div class="hint">Колесо — зум, перетаскивание — панорама.</div>
+    <canvas id="view" width="1024" height="768"></canvas>
+
+    <script type="module" src="./dist/src/main.js"></script>
+  </body>
+</html>
