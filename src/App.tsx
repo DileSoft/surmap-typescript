@@ -20,6 +20,59 @@ function pick(files: File[], ...exts: string[]): File | undefined {
   return files.find((f) => exts.some((e) => f.name.toLowerCase().endsWith(e)));
 }
 
+interface PaletteFile {
+  name: string;
+  bytes: Uint8Array;
+}
+
+/** Shimmer = the per-frame palette animation (pal_iter0/1/2), applied statically. */
+type ShimmerKind = 'none' | 'wave' | 'dyn' | 'all';
+interface ShimmerMode {
+  label: string;
+  kind: ShimmerKind;
+  index?: number;
+}
+
+function shimmerModes(config: WorldConfig | null): ShimmerMode[] {
+  const list: ShimmerMode[] = [{ label: 'нет', kind: 'none' }];
+  if (config) {
+    const w = config.dynamicPalette.waveTerrain;
+    if (w >= 0 && w < 8) list.push({ label: `волна: террейн ${w}`, kind: 'wave' });
+    config.dynamicPalette.cycles.forEach((c, i) =>
+      list.push({ label: `сдвиг ${i + 1}: террейн ${c.terrain}`, kind: 'dyn', index: i }),
+    );
+    if (list.length > 1) list.push({ label: 'всё вместе', kind: 'all' });
+  }
+  return list;
+}
+
+function applyShimmer(
+  base: Palette,
+  config: WorldConfig,
+  mode: ShimmerMode,
+  phase01: number,
+): Palette {
+  const { beginColors, endColors, dynamicPalette } = config;
+  let palette = base;
+  if (mode.kind === 'wave') {
+    palette = applyWaveCycle(palette, dynamicPalette.waveTerrain, beginColors, endColors, phase01);
+  } else if (mode.kind === 'dyn') {
+    palette = applyPaletteCycle(
+      palette,
+      dynamicPalette.cycles[mode.index ?? 0],
+      beginColors,
+      endColors,
+      phase01,
+    );
+  } else if (mode.kind === 'all') {
+    palette = applyWaveCycle(palette, dynamicPalette.waveTerrain, beginColors, endColors, phase01);
+    for (const c of dynamicPalette.cycles) {
+      palette = applyPaletteCycle(palette, c, beginColors, endColors, phase01);
+    }
+  }
+  return palette;
+}
+
 export default function App() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const viewerRef = useRef<Viewer | null>(null);
@@ -38,28 +91,14 @@ export default function App() {
   const [debug, setDebug] = useState<DebugMode>('color');
 
   const [config, setConfig] = useState<WorldConfig | null>(null);
+  // Palette files: each one is a selectable "cycle" (full palette swap).
+  const [palettes, setPalettes] = useState<PaletteFile[]>([]);
+  const [paletteSel, setPaletteSel] = useState(0);
   const [basePalette, setBasePalette] = useState<Palette | null>(null);
-  const [cycleSel, setCycleSel] = useState(0);
-  const [phase, setPhase] = useState(50); // static position within the selected cycle, %
 
-  // Palette "cycles" available for this world: the wave terrain + each Dynamic
-  // Palette record, plus a combined view (as the game applies them together).
-  type CycleMode =
-    | { label: string; kind: 'original' }
-    | { label: string; kind: 'wave' }
-    | { label: string; kind: 'dyn'; index: number }
-    | { label: string; kind: 'all' };
-  const modes: CycleMode[] = [{ label: 'оригинал', kind: 'original' }];
-  if (config) {
-    const w = config.dynamicPalette.waveTerrain;
-    if (w >= 0 && w < 8) modes.push({ label: `волна: террейн ${w}`, kind: 'wave' });
-    config.dynamicPalette.cycles.forEach((c, i) =>
-      modes.push({ label: `цикл ${i + 1}: террейн ${c.terrain}`, kind: 'dyn', index: i }),
-    );
-    if (modes.length > 1) modes.push({ label: 'всё сразу', kind: 'all' });
-  }
+  const [shimmerSel, setShimmerSel] = useState(0);
+  const [phase, setPhase] = useState(50);
 
-  // Create the viewer once the canvas exists.
   useEffect(() => {
     if (!canvasRef.current) return;
     const viewer = new Viewer(canvasRef.current, { onInfo: setInfo, onCursor: setCursor });
@@ -70,33 +109,39 @@ export default function App() {
     };
   }, []);
 
+  // Re-apply shimmer whenever the base palette, cycle or phase changes.
+  useEffect(() => {
+    if (!viewerRef.current || !basePalette || !config) return;
+    const mode = shimmerModes(config)[shimmerSel] ?? { label: 'нет', kind: 'none' as const };
+    viewerRef.current.setPalette(applyShimmer(basePalette, config, mode, phase / 100));
+  }, [basePalette, shimmerSel, phase, config]);
+
   async function buildAndShow(
-    iniText: string,
+    cfg: WorldConfig,
     dataBytes: Uint8Array,
     vprBytes: Uint8Array | null,
-    palBytes: Uint8Array | null,
+    paletteFiles: PaletteFile[],
+    baseIndex: number,
   ) {
     setStatus('Декодирование...');
     await sleep(30);
 
-    const config = parseWorldConfig(iniText);
     const t0 = performance.now();
-    const level = config.isCompressed ? loadVmc(dataBytes, config) : loadVmp(dataBytes, config);
+    const level = cfg.isCompressed ? loadVmc(dataBytes, cfg) : loadVmp(dataBytes, cfg);
     const tDecode = performance.now() - t0;
 
-    const flood = vprBytes ? loadVpr(vprBytes, config)[0] : 0;
-    const palette = buildPalette(
-      loadPalette(palBytes ?? new Uint8Array(768)),
-      config.beginColors,
-      config.endColors,
-    );
-    const luts = renderPrepare(config.beginColors, config.endColors, flood);
+    const flood = vprBytes ? loadVpr(vprBytes, cfg)[0] : 0;
+    const palBytes = paletteFiles[baseIndex]?.bytes ?? new Uint8Array(768);
+    const palette = buildPalette(palBytes, cfg.beginColors, cfg.endColors);
+    const luts = renderPrepare(cfg.beginColors, cfg.endColors, flood);
     const nextMap = new VrtMap(level, luts);
 
     setMap(nextMap);
-    setConfig(config);
+    setConfig(cfg);
+    setPalettes(paletteFiles);
+    setPaletteSel(baseIndex);
     setBasePalette(palette);
-    setCycleSel(0);
+    setShimmerSel(0);
     setPhase(50);
     if (import.meta.env.DEV) {
       (window as unknown as { __map?: VrtMap }).__map = nextMap;
@@ -105,53 +150,40 @@ export default function App() {
     setStatus(`Готово: ${level.sizeX}x${level.sizeY}, декод ${tDecode.toFixed(0)} мс.`);
   }
 
-  /** Applies the selected palette cycle at a static phase (no animation). */
-  function rebuildPalette(sel: number, phPercent: number) {
-    setCycleSel(sel);
-    setPhase(phPercent);
-    if (!basePalette || !config) return;
-    const phase01 = phPercent / 100;
-    const { beginColors, endColors, dynamicPalette } = config;
-    const mode = modes[sel];
-    let palette = basePalette;
-    if (mode?.kind === 'wave') {
-      palette = applyWaveCycle(palette, dynamicPalette.waveTerrain, beginColors, endColors, phase01);
-    } else if (mode?.kind === 'dyn') {
-      palette = applyPaletteCycle(
-        palette,
-        dynamicPalette.cycles[mode.index],
-        beginColors,
-        endColors,
-        phase01,
-      );
-    } else if (mode?.kind === 'all') {
-      palette = applyWaveCycle(palette, dynamicPalette.waveTerrain, beginColors, endColors, phase01);
-      for (const c of dynamicPalette.cycles) {
-        palette = applyPaletteCycle(palette, c, beginColors, endColors, phase01);
-      }
-    }
-    viewerRef.current?.setPalette(palette);
+  function selectPalette(index: number) {
+    setPaletteSel(index);
+    if (!config || !palettes[index]) return;
+    setBasePalette(buildPalette(palettes[index].bytes, config.beginColors, config.endColors));
   }
 
-  /** Loads a world from an arbitrary set of selected files, matched by extension. */
   async function loadFromFiles(files: File[]) {
     try {
       const ini = pick(files, '.ini');
       const data = pick(files, '.vmc', '.vmp');
       const vpr = pick(files, '.vpr');
-      const pal = pick(files, '.pal');
-
       if (!ini || !data) {
         setStatus('Нужны минимум world.ini и .vmp/.vmc.');
         return;
       }
       setStatus('Чтение файлов...');
       await sleep(0);
+
+      const cfg = parseWorldConfig(new TextDecoder().decode(await readFile(ini)));
+      // Every selected .pal is a cycle; the world's own palette is the default.
+      const palFiles = files.filter((f) => f.name.toLowerCase().endsWith('.pal'));
+      const paletteFiles: PaletteFile[] = [];
+      for (const f of palFiles) paletteFiles.push({ name: f.name, bytes: await readFile(f) });
+      let baseIndex = paletteFiles.findIndex(
+        (p) => p.name.toLowerCase() === cfg.paletteFile.toLowerCase(),
+      );
+      if (baseIndex < 0) baseIndex = 0;
+
       await buildAndShow(
-        new TextDecoder().decode(await readFile(ini)),
+        cfg,
         await readFile(data),
         vpr ? await readFile(vpr) : null,
-        pal ? await readFile(pal) : null,
+        paletteFiles,
+        baseIndex,
       );
     } catch (e) {
       console.error(e);
@@ -159,13 +191,14 @@ export default function App() {
     }
   }
 
-  /** Button inside the collapsed "separately" section. */
   async function loadSeparately() {
     const files = [iniRef.current, dataRef.current, vprRef.current, palRef.current]
-      .map((r) => r?.files?.[0])
-      .filter((f): f is File => !!f);
+      .map((r) => Array.from(r?.files ?? []))
+      .flat();
     await loadFromFiles(files);
   }
+
+  const modeList = shimmerModes(config);
 
   return (
     <>
@@ -197,11 +230,55 @@ export default function App() {
               .vpr <input ref={vprRef} type="file" accept=".vpr" />
             </label>
             <label>
-              .pal <input ref={palRef} type="file" accept=".pal" />
+              .pal <input ref={palRef} type="file" accept=".pal" multiple />
             </label>
             <button onClick={() => void loadSeparately()}>Загрузить</button>
           </div>
         </details>
+
+        <label>
+          цикл (палитра)
+          <select
+            value={paletteSel}
+            disabled={palettes.length <= 1}
+            onChange={(e) => selectPalette(Number(e.target.value))}
+          >
+            {palettes.length === 0 && <option>— один .pal —</option>}
+            {palettes.map((p, i) => (
+              <option key={i} value={i}>
+                {p.name}
+              </option>
+            ))}
+          </select>
+        </label>
+
+        <label>
+          мерцание
+          <select
+            value={shimmerSel}
+            disabled={modeList.length <= 1}
+            onChange={(e) => setShimmerSel(Number(e.target.value))}
+          >
+            {modeList.map((m, i) => (
+              <option key={i} value={i}>
+                {m.label}
+              </option>
+            ))}
+          </select>
+        </label>
+
+        <label title="Положение мерцания (статически)">
+          фаза
+          <input
+            type="range"
+            min={0}
+            max={100}
+            value={phase}
+            disabled={modeList[shimmerSel]?.kind === 'none'}
+            onChange={(e) => setPhase(Number(e.target.value))}
+          />
+          <span className="phase-val">{phase}%</span>
+        </label>
 
         <label>
           рендер
@@ -236,34 +313,6 @@ export default function App() {
             <option value="objshadow">OBJSHADOW</option>
             <option value="doublebits">DOUBLE бит</option>
           </select>
-        </label>
-
-        <label>
-          цикл
-          <select
-            value={cycleSel}
-            disabled={modes.length <= 1}
-            onChange={(e) => rebuildPalette(Number(e.target.value), phase)}
-          >
-            {modes.map((m, i) => (
-              <option key={i} value={i}>
-                {m.label}
-              </option>
-            ))}
-          </select>
-        </label>
-
-        <label title="Положение внутри цикла (статически)">
-          фаза
-          <input
-            type="range"
-            min={0}
-            max={100}
-            value={phase}
-            disabled={cycleSel === 0}
-            onChange={(e) => rebuildPalette(cycleSel, Number(e.target.value))}
-          />
-          <span className="phase-val">{phase}%</span>
         </label>
 
         <button disabled={!map} onClick={() => viewerRef.current?.fit()}>
