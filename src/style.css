@@ -62,6 +62,12 @@ button:disabled {
   padding: 2px 12px;
 }
 
+.phase-val {
+  color: #9aa4b8;
+  min-width: 38px;
+  text-align: right;
+}
+
 label.primary input[type='file'] {
   border-color: #4a6ea8;
 }

@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { loadPalette, loadVmc, loadVmp, loadVpr, parseWorldConfig, type WorldConfig } from './loader';
 import { renderPrepare } from './luts';
-import { applyPaletteCycle, buildPalette, type Palette, type PaletteCycle } from './palette';
+import { applyPaletteCycle, applyWaveCycle, buildPalette, type Palette } from './palette';
 import { VrtMap } from './vmap';
 import { Viewer, type DebugMode, type RenderMode } from './viewer/viewer';
 
@@ -39,8 +39,25 @@ export default function App() {
 
   const [config, setConfig] = useState<WorldConfig | null>(null);
   const [basePalette, setBasePalette] = useState<Palette | null>(null);
-  const [cycles, setCycles] = useState<PaletteCycle[]>([]);
-  const [cycleSel, setCycleSel] = useState(0); // 0 = original, i+1 = cycles[i]
+  const [cycleSel, setCycleSel] = useState(0);
+  const [phase, setPhase] = useState(50); // static position within the selected cycle, %
+
+  // Palette "cycles" available for this world: the wave terrain + each Dynamic
+  // Palette record, plus a combined view (as the game applies them together).
+  type CycleMode =
+    | { label: string; kind: 'original' }
+    | { label: string; kind: 'wave' }
+    | { label: string; kind: 'dyn'; index: number }
+    | { label: string; kind: 'all' };
+  const modes: CycleMode[] = [{ label: 'оригинал', kind: 'original' }];
+  if (config) {
+    const w = config.dynamicPalette.waveTerrain;
+    if (w >= 0 && w < 8) modes.push({ label: `волна: террейн ${w}`, kind: 'wave' });
+    config.dynamicPalette.cycles.forEach((c, i) =>
+      modes.push({ label: `цикл ${i + 1}: террейн ${c.terrain}`, kind: 'dyn', index: i }),
+    );
+    if (modes.length > 1) modes.push({ label: 'всё сразу', kind: 'all' });
+  }
 
   // Create the viewer once the canvas exists.
   useEffect(() => {
@@ -79,8 +96,8 @@ export default function App() {
     setMap(nextMap);
     setConfig(config);
     setBasePalette(palette);
-    setCycles(config.dynamicPalette.cycles);
     setCycleSel(0);
+    setPhase(50);
     if (import.meta.env.DEV) {
       (window as unknown as { __map?: VrtMap }).__map = nextMap;
     }
@@ -88,14 +105,31 @@ export default function App() {
     setStatus(`Готово: ${level.sizeX}x${level.sizeY}, декод ${tDecode.toFixed(0)} мс.`);
   }
 
-  /** Applies the selected Dynamic Palette record statically (no animation). */
-  function selectCycle(sel: number) {
+  /** Applies the selected palette cycle at a static phase (no animation). */
+  function rebuildPalette(sel: number, phPercent: number) {
     setCycleSel(sel);
+    setPhase(phPercent);
     if (!basePalette || !config) return;
-    const palette =
-      sel === 0
-        ? basePalette
-        : applyPaletteCycle(basePalette, cycles[sel - 1], config.beginColors, config.endColors);
+    const phase01 = phPercent / 100;
+    const { beginColors, endColors, dynamicPalette } = config;
+    const mode = modes[sel];
+    let palette = basePalette;
+    if (mode?.kind === 'wave') {
+      palette = applyWaveCycle(palette, dynamicPalette.waveTerrain, beginColors, endColors, phase01);
+    } else if (mode?.kind === 'dyn') {
+      palette = applyPaletteCycle(
+        palette,
+        dynamicPalette.cycles[mode.index],
+        beginColors,
+        endColors,
+        phase01,
+      );
+    } else if (mode?.kind === 'all') {
+      palette = applyWaveCycle(palette, dynamicPalette.waveTerrain, beginColors, endColors, phase01);
+      for (const c of dynamicPalette.cycles) {
+        palette = applyPaletteCycle(palette, c, beginColors, endColors, phase01);
+      }
+    }
     viewerRef.current?.setPalette(palette);
   }
 
@@ -208,16 +242,28 @@ export default function App() {
           цикл
           <select
             value={cycleSel}
-            disabled={cycles.length === 0}
-            onChange={(e) => selectCycle(Number(e.target.value))}
+            disabled={modes.length <= 1}
+            onChange={(e) => rebuildPalette(Number(e.target.value), phase)}
           >
-            <option value={0}>оригинал</option>
-            {cycles.map((c, i) => (
-              <option key={i} value={i + 1}>
-                {`цикл ${i + 1}: террейн ${c.terrain} (R${c.red} G${c.green} B${c.blue}, ампл ${c.ampl})`}
+            {modes.map((m, i) => (
+              <option key={i} value={i}>
+                {m.label}
               </option>
             ))}
           </select>
+        </label>
+
+        <label title="Положение внутри цикла (статически)">
+          фаза
+          <input
+            type="range"
+            min={0}
+            max={100}
+            value={phase}
+            disabled={cycleSel === 0}
+            onChange={(e) => rebuildPalette(cycleSel, Number(e.target.value))}
+          />
+          <span className="phase-val">{phase}%</span>
         </label>
 
         <button disabled={!map} onClick={() => viewerRef.current?.fit()}>

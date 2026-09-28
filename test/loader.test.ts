@@ -16,7 +16,7 @@ import { describe, expect, test } from 'vitest';
 import { loadPalette, loadVmc, loadVpr, parseWorldConfig } from '../src/loader';
 import { renderPrepare } from '../src/luts';
 import { VrtMap } from '../src/vmap';
-import { applyPaletteCycle, buildPalette } from '../src/palette';
+import { applyPaletteCycle, applyWaveCycle, buildPalette } from '../src/palette';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const dataDir = process.env.VANGERS_WORLD || path.resolve(__dirname, '../../Vangers/data/thechain/fostral');
@@ -106,6 +106,25 @@ describe('palette cycle', () => {
       end,
     );
     expect(out2.rgb[3 * 40 + 0]).toBe(63);
+  });
+
+  test('wave cycle brightens a sliding band in the wave terrain range', () => {
+    const rgb = new Uint8Array(768).fill(10);
+    const begin = [1, 32, 64, 72, 88, 104, 112, 120];
+    const end = [31, 63, 71, 87, 103, 111, 119, 127];
+    const base = buildPalette(rgb, begin, end);
+    const out = applyWaveCycle(base, 0, begin, end, 0.5);
+
+    let changed = 0;
+    let unchanged = 0;
+    for (let i = 2; i <= 31; i++) {
+      if (out.rgb[3 * i] > base.rgb[3 * i]) changed++;
+      else if (out.rgb[3 * i] === base.rgb[3 * i]) unchanged++;
+    }
+    expect(changed).toBeGreaterThan(0);
+    expect(unchanged).toBeGreaterThan(0);
+    // outside the wave terrain range (terrain 1 begin) nothing changes
+    expect(out.rgb[3 * 32]).toBe(base.rgb[3 * 32]);
   });
 });
 

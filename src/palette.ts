@@ -27,6 +27,51 @@ export interface PaletteCycle {
   blue: number;
 }
 
+const PIx2 = 1 << 12; // 4096 angle units
+const SIN_UNIT = 1 << 16; // UNIT (0x10000)
+
+/** `SI[i] = round(UNIT * sin(i / PIx2 * 2pi))` — the game's sine table. */
+function sine(offset: number): number {
+  return Math.round(SIN_UNIT * Math.sin((offset / PIx2) * Math.PI * 2));
+}
+
+/**
+ * `pal_iter0`/`pal_iter1`: a bright band that slides across the palette range of
+ * the world's `Wave Terrain` (for fostral this is water, terrain 0). The band
+ * shape is fixed; `phase01` (0..1) selects its position within the cycle.
+ * Applied statically, without the per-frame time step.
+ */
+export function applyWaveCycle(
+  base: Palette,
+  waveTerrain: number,
+  beginColors: number[],
+  endColors: number[],
+  phase01: number,
+): Palette {
+  if (waveTerrain < 0 || waveTerrain >= 8) return base;
+  const rgb = base.rgb.slice();
+  const beg = beginColors[waveTerrain];
+  const sz = endColors[waveTerrain] - beg;
+  if (sz <= 0) return { rgb, rgba: toRgba(rgb) };
+
+  // pal_iter1 waveform (the one that survives pal_iter0, which writes the same range).
+  const data = [1, 3, 5, 7, 10, 8, 6, 4, 2, 1];
+  const dsize = data.length;
+  const off = Math.round(-dsize + phase01 * (sz + dsize - 1));
+
+  let p = beg + 1 + (off > 0 ? off : 0);
+  for (let i = 0; i < dsize; i++) {
+    if (off + i >= 0 && off + i < sz) {
+      for (let c = 0; c < 3; c++) {
+        const v = rgb[3 * p + c] + data[i];
+        rgb[3 * p + c] = v > 63 ? 63 : v;
+      }
+      p++;
+    }
+  }
+  return { rgb, rgba: toRgba(rgb) };
+}
+
 export function buildPalette(
   paletteFile: Uint8Array,
   beginColors: number[],
@@ -62,21 +107,24 @@ export function buildPalette(
 }
 
 /**
- * Applies one `Dynamic Palette` record to a base palette (the original
- * `pal_iter2` colour shift, taken at peak amplitude `sin = 1` and without the
- * per-frame time step). Only the channels flagged in the record are shifted,
- * within the record's terrain colour range, clamped to the 0..63 range.
+ * Applies one `Dynamic Palette` record to a base palette — the original
+ * `pal_iter2` colour shift `add = ampl * sin(offset) / UNIT`, without the
+ * per-frame time step. `phase01` (0..1) selects the cycle position; 0.25 is the
+ * positive peak (+ampl), 0.75 the negative one. Only the channels flagged in the
+ * record are shifted, within its terrain colour range, clamped to 0..63.
  */
 export function applyPaletteCycle(
   base: Palette,
   cycle: PaletteCycle,
   beginColors: number[],
   endColors: number[],
+  phase01 = 0.25,
 ): Palette {
   const rgb = base.rgb.slice();
+  const offset = Math.round(phase01 * (PIx2 - 1));
+  const add = Math.trunc((cycle.ampl * sine(offset)) / SIN_UNIT);
   const beg = beginColors[cycle.terrain];
   const end = endColors[cycle.terrain];
-  const add = cycle.ampl;
   for (let i = beg; i <= end; i++) {
     if (cycle.red) rgb[3 * i + 0] = clamp6(rgb[3 * i + 0] + add);
     if (cycle.green) rgb[3 * i + 1] = clamp6(rgb[3 * i + 1] + add);
