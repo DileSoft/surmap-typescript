@@ -7,15 +7,17 @@ import { Viewer, type DebugMode, type RenderMode } from './viewer/viewer';
 
 const sleep = (ms = 0) => new Promise((r) => setTimeout(r, ms));
 
-function readInput(input: HTMLInputElement | null): Promise<Uint8Array | null> {
-  const file = input?.files?.[0];
-  if (!file) return Promise.resolve(null);
+function readFile(file: File): Promise<Uint8Array> {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
     reader.onload = () => resolve(new Uint8Array(reader.result as ArrayBuffer));
     reader.onerror = () => reject(reader.error);
     reader.readAsArrayBuffer(file);
   });
+}
+
+function pick(files: File[], ...exts: string[]): File | undefined {
+  return files.find((f) => exts.some((e) => f.name.toLowerCase().endsWith(e)));
 }
 
 export default function App() {
@@ -27,7 +29,9 @@ export default function App() {
   const palRef = useRef<HTMLInputElement>(null);
 
   const [map, setMap] = useState<VrtMap | null>(null);
-  const [status, setStatus] = useState('Выберите файлы и нажмите «Загрузить».');
+  const [status, setStatus] = useState(
+    'Выберите файлы мира (world.ini, .vmp/.vmc, .vpr, .pal) в одном диалоге.',
+  );
   const [info, setInfo] = useState('');
   const [cursor, setCursor] = useState('');
   const [renderMode, setRenderMode] = useState<RenderMode>('reg');
@@ -75,19 +79,25 @@ export default function App() {
     setStatus(`Готово: ${level.sizeX}x${level.sizeY}, декод ${tDecode.toFixed(0)} мс.`);
   }
 
-  async function loadFromFiles() {
+  /** Loads a world from an arbitrary set of selected files, matched by extension. */
+  async function loadFromFiles(files: File[]) {
     try {
-      if (!iniRef.current?.files?.length || !dataRef.current?.files?.length) {
-        setStatus('Выберите world.ini и data (.vmp/.vmc) минимум.');
+      const ini = pick(files, '.ini');
+      const data = pick(files, '.vmc', '.vmp');
+      const vpr = pick(files, '.vpr');
+      const pal = pick(files, '.pal');
+
+      if (!ini || !data) {
+        setStatus('Нужны минимум world.ini и .vmp/.vmc.');
         return;
       }
       setStatus('Чтение файлов...');
       await sleep(0);
       await buildAndShow(
-        new TextDecoder().decode((await readInput(iniRef.current))!),
-        (await readInput(dataRef.current))!,
-        await readInput(vprRef.current),
-        await readInput(palRef.current),
+        new TextDecoder().decode(await readFile(ini)),
+        await readFile(data),
+        vpr ? await readFile(vpr) : null,
+        pal ? await readFile(pal) : null,
       );
     } catch (e) {
       console.error(e);
@@ -95,51 +105,49 @@ export default function App() {
     }
   }
 
-  // Auto-load when the page is opened as /?data=/@data/<world>/
-  useEffect(() => {
-    const base = new URLSearchParams(location.search).get('data');
-    if (!base) return;
-    const dir = base.endsWith('/') ? base : base + '/';
-    (async () => {
-      try {
-        setStatus(`Автозагрузка из ${dir}...`);
-        const iniText = await (await fetch(dir + 'world.ini')).text();
-        const config = parseWorldConfig(iniText);
-        const ext = config.isCompressed ? 'vmc' : 'vmp';
-        const data = new Uint8Array(
-          await (await fetch(dir + `${config.fileName}.${ext}`)).arrayBuffer(),
-        );
-        const vpr = await fetch(dir + `${config.fileName}.vpr`)
-          .then((r) => (r.ok ? r.arrayBuffer() : null))
-          .then((b) => (b ? new Uint8Array(b) : null));
-        const pal = await fetch(dir + config.paletteFile)
-          .then((r) => (r.ok ? r.arrayBuffer() : null))
-          .then((b) => (b ? new Uint8Array(b) : null));
-        await buildAndShow(iniText, data, vpr, pal);
-      } catch (e) {
-        console.error(e);
-        setStatus('Ошибка автозагрузки: ' + (e as Error).message);
-      }
-    })();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  /** Button inside the collapsed "separately" section. */
+  async function loadSeparately() {
+    const files = [iniRef.current, dataRef.current, vprRef.current, palRef.current]
+      .map((r) => r?.files?.[0])
+      .filter((f): f is File => !!f);
+    await loadFromFiles(files);
+  }
 
   return (
     <>
       <header>
-        <label>
-          world.ini <input ref={iniRef} type="file" accept=".ini,.txt" />
+        <label className="primary">
+          Файлы мира
+          <input
+            type="file"
+            multiple
+            accept=".ini,.txt,.vmp,.vmc,.vpr,.pal"
+            onChange={(e) => {
+              const files = [...(e.target.files ?? [])];
+              e.target.value = '';
+              if (files.length) void loadFromFiles(files);
+            }}
+          />
         </label>
-        <label>
-          data <input ref={dataRef} type="file" accept=".vmp,.vmc" />
-        </label>
-        <label>
-          .vpr <input ref={vprRef} type="file" accept=".vpr" />
-        </label>
-        <label>
-          .pal <input ref={palRef} type="file" accept=".pal" />
-        </label>
-        <button onClick={() => void loadFromFiles()}>Загрузить</button>
+
+        <details className="separately">
+          <summary>Загрузить по отдельности</summary>
+          <div className="sep-body">
+            <label>
+              world.ini <input ref={iniRef} type="file" accept=".ini,.txt" />
+            </label>
+            <label>
+              data <input ref={dataRef} type="file" accept=".vmp,.vmc" />
+            </label>
+            <label>
+              .vpr <input ref={vprRef} type="file" accept=".vpr" />
+            </label>
+            <label>
+              .pal <input ref={palRef} type="file" accept=".pal" />
+            </label>
+            <button onClick={() => void loadSeparately()}>Загрузить</button>
+          </div>
+        </details>
 
         <label>
           рендер

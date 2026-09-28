@@ -61,3 +61,36 @@ button:disabled {
   color: #6d768a;
   padding: 2px 12px;
 }
+
+label.primary input[type='file'] {
+  border-color: #4a6ea8;
+}
+
+details.separately {
+  position: relative;
+}
+
+details.separately summary {
+  cursor: pointer;
+  color: #9aa4b8;
+  padding: 3px 7px;
+  border: 1px solid #39415a;
+  border-radius: 5px;
+  background: #202634;
+  list-style: none;
+}
+
+details.separately summary::-webkit-details-marker {
+  display: none;
+}
+
+details.separately[open] summary {
+  margin-bottom: 6px;
+}
+
+.sep-body {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: center;
+}

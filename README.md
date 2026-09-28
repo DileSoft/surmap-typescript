@@ -36,7 +36,7 @@ src/
   main.tsx         точка входа React
   style.css
 index.html
-vite.config.ts     React-плагин + раздача VANGERS_DATA под /@data/
+vite.config.ts     конфиг Vite (react-плагин)
 test/
   loader.test.ts   Vitest: декод реального мира fostral, инварианты, PNG-превью
   debug-vmc.mjs    утилита разбора заголовка/таблиц VMC
@@ -54,15 +54,10 @@ npm run typecheck  # tsc --noEmit
 ```
 
 ### Данные мира
-В браузере выберите `world.ini`, `output.vmp|vmc`, `output.vpr`, `harmony.pal`.
-
-Либо отдайте каталог с данными Vangers и откройте автозагрузку. `vite.config.ts`
-публикует `<VANGERS_DATA>` read-only под `/@data/`:
-
-```powershell
-$env:VANGERS_DATA='D:\...\Vangers\data'; npm run dev
-# затем: http://localhost:5173/?data=/@data/thechain/fostral/
-```
+Всё работает целиком в браузере, без серверной загрузки. Нажмите «Файлы мира» и
+выберите в одном диалоге сразу `world.ini`, `output.vmp|vmc`, `output.vpr` и
+`harmony.pal` — файлы сопоставляются по расширению. При желании те же файлы можно
+выбрать по отдельности в свёрнутом разделе «Загрузить по отдельности».
 
 ## Проверка
 
