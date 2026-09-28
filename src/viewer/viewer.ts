@@ -3,7 +3,7 @@
  * draws the palette-indexed surface and handles zoom/pan/cursor. React only
  * drives it through its public methods and callbacks.
  */
-import { DOUBLE_LEVEL, OBJSHADOW, SHADOW_MASK, TERRAIN_MASK, TERRAIN_OFFSET } from '../constants';
+import { DOUBLE_LEVEL, OBJSHADOW, SHADOW_MASK } from '../constants';
 import type { Palette } from '../palette';
 import {
   projectShape,
@@ -12,7 +12,7 @@ import {
   type C3DModel,
   type ShapeOptions,
 } from '../shape';
-import type { VrtMap } from '../vmap';
+import type { Layer, VrtMap } from '../vmap';
 
 export type RenderMode = 'line' | 'reg';
 export type DebugMode =
@@ -39,6 +39,8 @@ export interface EditOptions {
   smode: number;
   /** Smoothing threshold for the `smooth` tool. */
   equDelta: number;
+  /** Material (`CurrentTerrain`) written to edited voxels; -1 keeps it. */
+  material?: number;
   /** Footprint of the loaded 3D shape (for the placement preview). */
   shapeFootprint?: { x: number; y: number; size: number } | null;
   /** Translucent preview bitmap of the projected shape. */
@@ -103,6 +105,7 @@ export class Viewer {
     smooth: 5,
     smode: 0,
     equDelta: 5,
+    material: -1,
   };
   private hoverX = -1;
   private hoverY = -1;
@@ -154,6 +157,18 @@ export class Viewer {
 
   setDebug(mode: DebugMode): void {
     this.debug = mode;
+    this.draw();
+  }
+
+  /**
+   * Switches the shown/edited layer (SURMAP `RenderingLayer`). Shadow bits of
+   * the previous layer's render are reset, then the visible rows re-render.
+   */
+  setLayer(layer: Layer): void {
+    if (!this.map || this.map.currentLayer === layer) return;
+    this.map.setLayer(layer);
+    this.map.resetMeta();
+    this.tag++;
     this.draw();
   }
 
@@ -293,7 +308,7 @@ export class Viewer {
     const proj = projectShape(model, opts, x, y);
     const region = regionOf(proj);
     this.pushHistory(region.lowX, region.lowY, region.hiX, region.hiY);
-    stampProjection(map, proj, opts);
+    stampProjection(map, proj, opts, this.edit.material ?? -1);
     this.refreshRegion(region.lowX, region.lowY, region.hiX, region.hiY);
   }
 
@@ -360,7 +375,8 @@ export class Viewer {
     const ymask = map.sizeY - 1;
     for (let y = lowY; y <= hiY; y++) {
       const yy = y & ymask;
-      if (this.renderMode === 'reg') map.regRender(lowX, yy, hiX + 1, yy + 1);
+      if (map.currentLayer === 'down') map.regDownRender(lowX, yy, hiX + 1, yy + 1);
+      else if (this.renderMode === 'reg') map.regRender(lowX, yy, hiX + 1, yy + 1);
       else map.lineRender(yy);
       this.renderedRows[yy] = this.tag + 1;
     }
@@ -383,7 +399,7 @@ export class Viewer {
           : 0;
     const eql = this.edit.tool === 'smooth' ? this.edit.equDelta : 0;
     this.pushHistory(x - rad, y - rad, x + rad, y + rad);
-    map.deltaZone(x, y, rad, this.edit.smooth, dh, this.edit.smode, eql);
+    map.deltaZone(x, y, rad, this.edit.smooth, dh, this.edit.smode, eql, this.edit.material ?? -1);
     this.refreshRegion(x - rad, y - rad, x + rad, y + rad);
   }
 
@@ -424,7 +440,7 @@ export class Viewer {
 
   infoText(): string {
     return (
-      `mode=${this.renderMode} view=${this.debug} ` +
+      `mode=${this.renderMode} layer=${this.map?.currentLayer ?? 'up'} view=${this.debug} ` +
       `scale=${this.scale.toFixed(2)} offset=(${this.offsetX.toFixed(0)},${this.offsetY.toFixed(0)})`
     );
   }
@@ -433,7 +449,8 @@ export class Viewer {
     const map = this.map;
     if (!map || y < 0 || y >= map.sizeY) return;
     if (this.renderedRows[y] === this.tag + 1) return;
-    if (this.renderMode === 'reg') map.regRender(0, y, map.sizeX - 1, y + 1);
+    if (map.currentLayer === 'down') map.regDownRender(0, y, map.sizeX - 1, y + 1);
+    else if (this.renderMode === 'reg') map.regRender(0, y, map.sizeX - 1, y + 1);
     else map.lineRender(y);
     this.renderedRows[y] = this.tag + 1;
   }
@@ -441,7 +458,7 @@ export class Viewer {
   private sampleIndex(x: number, y: number): number {
     const map = this.map!;
     const base = y * map.sizeX + x;
-    const h = map.height[base];
+    const h = map.getAlt(base, x);
     const m = map.meta[base];
     switch (this.debug) {
       case 'color':
@@ -451,7 +468,7 @@ export class Viewer {
       case 'double':
         return (((m & DOUBLE_LEVEL) ? 64 : 128) + (h >> 2)) & 0xff;
       case 'terrain':
-        return (((m & TERRAIN_MASK) >> TERRAIN_OFFSET) * 32) & 0xff;
+        return (map.getTerrain(base, x) * 32) & 0xff;
       case 'shadow':
         return m & SHADOW_MASK ? 255 : map.color[base];
       case 'objshadow':
@@ -620,11 +637,11 @@ export class Viewer {
     const { x, y } = this.screenToMap(px, py);
     if (x < 0 || y < 0 || x >= map.sizeX || y >= map.sizeY) return '';
     const base = y * map.sizeX + x;
-    const h = map.height[base];
+    const h = map.getAlt(base, x);
     const m = map.meta[base];
-    const terrain = (m & TERRAIN_MASK) >> TERRAIN_OFFSET;
+    const terrain = map.getTerrain(base, x);
     const flags =
       (m & DOUBLE_LEVEL ? 'D' : '') + (m & SHADOW_MASK ? 'S' : '') + (m & OBJSHADOW ? 'O' : '');
-    return `x=${x} y=${y} h=${h} terrain=${terrain} flags=${flags || '-'}`;
+    return `x=${x} y=${y} ${map.currentLayer}=${h} terrain=${terrain} flags=${flags || '-'}`;
   }
 }

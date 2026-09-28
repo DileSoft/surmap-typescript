@@ -406,9 +406,10 @@ export function stampShape(
   opts: ShapeOptions,
   xOff: number,
   yOff: number,
+  material = -1,
 ): { lowX: number; lowY: number; hiX: number; hiY: number } {
   const proj = projectShape(model, opts, xOff, yOff);
-  stampProjection(map, proj, opts);
+  stampProjection(map, proj, opts, material);
   return regionOf(proj);
 }
 
@@ -428,7 +429,12 @@ export function regionOf(proj: ShapeProjection): {
 }
 
 /** Stamps an already-projected model into the terrain (`S3Danalyze`). */
-export function stampProjection(map: VrtMap, proj: ShapeProjection, opts: ShapeOptions): void {
+export function stampProjection(
+  map: VrtMap,
+  proj: ShapeProjection,
+  opts: ShapeOptions,
+  material = -1,
+): void {
   const { size, shift, shapeX, shapeY } = proj;
   const surface = opts.side ? proj.lower : proj.upper;
   const empty = opts.side ? 255 : 0;
@@ -478,7 +484,7 @@ export function stampProjection(map: VrtMap, proj: ShapeProjection, opts: ShapeO
           vv = v + h;
           break;
       }
-      map.pixSet(xx, yy, vv - h);
+      map.pixSet(xx, yy, vv - h, material);
     }
   }
 }

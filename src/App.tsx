@@ -10,7 +10,7 @@ import {
   type C3DModel,
   type ShapeOptions,
 } from './shape';
-import { VrtMap } from './vmap';
+import { VrtMap, type Layer } from './vmap';
 import { Viewer, type DebugMode, type EditTool, type RenderMode } from './viewer/viewer';
 
 const sleep = (ms = 0) => new Promise((r) => setTimeout(r, ms));
@@ -165,6 +165,8 @@ export default function App() {
   const [editRadius, setEditRadius] = useState(32);
   const [editStrength, setEditStrength] = useState(8);
   const [editSmooth, setEditSmooth] = useState(5);
+  const [editLayer, setEditLayer] = useState<Layer>('up');
+  const [editMaterial, setEditMaterial] = useState(-1);
   const [saveFormat, setSaveFormat] = useState<'vmc' | 'vmp'>('vmp');
   const [canUndo, setCanUndo] = useState(false);
   const [canRedo, setCanRedo] = useState(false);
@@ -241,6 +243,9 @@ export default function App() {
       },
     });
     viewerRef.current = viewer;
+    if (import.meta.env.DEV) {
+      (window as unknown as { __viewer?: Viewer }).__viewer = viewer;
+    }
     return () => {
       viewer.dispose();
       viewerRef.current = null;
@@ -263,10 +268,16 @@ export default function App() {
       smooth: editSmooth,
       smode: 0,
       equDelta: 5,
+      material: editMaterial,
       shapeFootprint: shapeInfo,
       shapePreview: editTool === 'shape' ? shapePreview : null,
     });
-  }, [editTool, editRadius, editStrength, editSmooth, shapeInfo, shapePreview]);
+  }, [editTool, editRadius, editStrength, editSmooth, editMaterial, shapeInfo, shapePreview]);
+
+  // Selected layer drives both the shown surface and where edits land.
+  useEffect(() => {
+    viewerRef.current?.setLayer(editLayer);
+  }, [editLayer]);
 
   // The 3D tab is contextual: open it with the shape tool, leave it when the tool changes.
   useEffect(() => {
@@ -336,6 +347,7 @@ export default function App() {
       (window as unknown as { __map?: VrtMap }).__map = nextMap;
     }
     viewerRef.current?.setData(nextMap, palette);
+    viewerRef.current?.setLayer(editLayer);
     setStatus(`Готово: ${level.sizeX}x${level.sizeY}, декод ${tDecode.toFixed(0)} мс.`);
   }
 
@@ -554,6 +566,25 @@ export default function App() {
                     </select>
                   </label>
                 </Group>
+                <Group label="Слой">
+                  <label>
+                    показ и правка
+                    <select
+                      value={editLayer}
+                      onChange={(e) => setEditLayer(e.target.value as Layer)}
+                    >
+                      <option value="up">верхний</option>
+                      <option value="down">нижний</option>
+                    </select>
+                  </label>
+                  <Hint>
+                    Слой влияет и на показ, и на правку. <b>верхний</b> — основная
+                    поверхность, <b>нижний</b> — нижняя поверхность double-уровня
+                    (тоннели/мосты). Нижний слой рисуется <code>regDownRender</code>{' '}
+                    (surmap/dsidernd.cpp); отдельного <code>LINE_render</code> для него в
+                    оригинале нет.
+                  </Hint>
+                </Group>
                 <Group label="Масштаб">
                   <button disabled={!map} onClick={() => viewerRef.current?.fit()}>
                     Fit
@@ -704,6 +735,32 @@ export default function App() {
                     />
                     <span className="phase-val">{editSmooth}</span>
                   </label>
+                </Group>
+                <Group label="Материал">
+                  <label>
+                    материал
+                    <select
+                      value={editMaterial}
+                      onChange={(e) => setEditMaterial(Number(e.target.value))}
+                    >
+                      <option value={-1}>не менять</option>
+                      {[0, 1, 2, 3, 4, 5, 6, 7].map((t) => (
+                        <option key={t} value={t}>
+                          {t === 0 ? '0 — вода' : t === 1 ? '1 — основной' : `${t}`}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  <span className="phase-val">
+                    слой: {editLayer === 'up' ? 'верх' : 'низ'}
+                  </span>
+                  <Hint>
+                    Материал (<code>CurrentTerrain</code>) пишется в каждую затронутую
+                    воксель текущего слоя — как в <code>pixSet</code> /{' '}
+                    <code>pixDownSet</code>. «не менять» (−1) сохраняет материал. Слой
+                    (верх/низ) переключается на вкладке <b>«Вид»</b>; он же определяет,
+                    куда попадут правки.
+                  </Hint>
                 </Group>
                 <Group label="История">
                   <button disabled={!canUndo} onClick={() => viewerRef.current?.undo()} title="Ctrl+Z">

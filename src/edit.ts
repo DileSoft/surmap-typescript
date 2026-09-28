@@ -13,9 +13,10 @@ import { H_SIZE, MAX_RADIUS } from './constants';
 export interface EditableMap {
   sizeX: number;
   sizeY: number;
-  pixSet(x: number, y: number, delta: number): void;
-  /** `GET_UP_ALT` at an absolute index (the top height of a double column). */
-  getUpAlt(index: number, x: number): number;
+  /** Writes a height delta (and optionally a material) to the current layer. */
+  pixSet(x: number, y: number, delta: number, material?: number): void;
+  /** Current layer altitude at an absolute index (`GET_UP_ALT`/`GET_DOWN_ALT`). */
+  getAlt(index: number, x: number): number;
 }
 
 /**
@@ -98,6 +99,8 @@ let locp = 0;
  * @param dh     height delta per click (>0 mountain, <0 depression, 0 = smooth)
  * @param smode  rim distribution: 0 = even, 1 = random, 2 = rotating
  * @param eql    smoothing threshold (used when dh == 0)
+ * @param material  material (`CurrentTerrain`) written to touched voxels, or
+ *                  `TERRAIN_KEEP`/negative to leave the material unchanged.
  */
 export function deltaZone(
   map: EditableMap,
@@ -108,10 +111,13 @@ export function deltaZone(
   dh: number,
   smode: number,
   eql: number,
+  material = -1,
 ): void {
   const clipX = H_SIZE - 1;
   const clipY = map.sizeY - 1;
   const tables = getRadTables();
+
+  const pset = (cx: number, cy: number, d: number) => map.pixSet(cx, cy, d, material);
 
   const r = rad - Math.floor((rad * smth) / 10);
   const d = 1.0 / (rad - r + 1);
@@ -122,7 +128,7 @@ export function deltaZone(
       const xx = tables.ringX(i);
       const yy = tables.ringY(i);
       for (let j = 0; j < max; j++) {
-        map.pixSet((x + xx[j]) & clipX, (y + yy[j]) & clipY, dh);
+        pset((x + xx[j]) & clipX, (y + yy[j]) & clipY, dh);
       }
     }
 
@@ -140,7 +146,7 @@ export function deltaZone(
           const ds = v / max;
           for (let s = ds, k = 0, j = locp % max; k < max; j = j + 1 === max ? 0 : j + 1, k++, s += ds) {
             if (s >= 1.0) {
-              map.pixSet((x + xx[j]) & clipX, (y + yy[j]) & clipY, h);
+              pset((x + xx[j]) & clipX, (y + yy[j]) & clipY, h);
               s -= 1.0;
             }
           }
@@ -150,7 +156,7 @@ export function deltaZone(
           const v = Math.trunc(dd * 1000000.0);
           for (let j = 0; j < max; j++) {
             if (Math.trunc(Math.random() * 1000000) < v) {
-              map.pixSet((x + xx[j]) & clipX, (y + yy[j]) & clipY, h);
+              pset((x + xx[j]) & clipX, (y + yy[j]) & clipY, h);
             }
           }
           break;
@@ -158,7 +164,7 @@ export function deltaZone(
         case 2: {
           const v = Math.trunc(dd * max);
           for (let k = 0, j = locp % max; k < v; j = j + 1 === max ? 0 : j + 1, k++) {
-            map.pixSet((x + xx[j]) & clipX, (y + yy[j]) & clipY, h);
+            pset((x + xx[j]) & clipX, (y + yy[j]) & clipY, h);
           }
           locp += max;
           break;
@@ -169,25 +175,25 @@ export function deltaZone(
     return;
   }
 
-  // dh == 0: smoothing around the mean height (up layer only). Ported from the
+  // dh == 0: smoothing around the mean height (current layer). Ported from the
   // `else` branch of deltaZone; `eql` limits how far a voxel may sit from the
   // local mean before it is left alone.
   const sizeX = map.sizeX;
   const baseRow = (yy: number) => (yy & clipY) * sizeX;
 
-  const upAlt = (cx: number, cy: number) => map.getUpAlt(baseRow(cy) + cx, cx);
+  const alt = (cx: number, cy: number) => map.getAlt(baseRow(cy) + cx, cx);
 
   const meanOrNeighbours = (cx: number, cy: number, mode0: boolean): number => {
     let v = 0;
     if (mode0) {
       for (let dy = -1; dy <= 1; dy++) {
-        for (let dx = -1; dx <= 1; dx++) v += upAlt((cx + dx) & clipX, cy + dy);
+        for (let dx = -1; dx <= 1; dx++) v += alt((cx + dx) & clipX, cy + dy);
       }
       return v >> 3;
     }
     for (let dy = -1; dy <= 1; dy++) {
       for (let dx = -1; dx <= 1; dx++) {
-        if (Math.abs(dx) + Math.abs(dy) === 2) v += upAlt((cx + dx) & clipX, cy + dy);
+        if (Math.abs(dx) + Math.abs(dy) === 2) v += alt((cx + dx) & clipX, cy + dy);
       }
     }
     return v >> 2;
@@ -202,17 +208,17 @@ export function deltaZone(
       const xx = tables.ringX(i);
       const yy = tables.ringY(i);
       for (let j = 0; j < max; j++) {
-        mean += upAlt((x + xx[j]) & clipX, (y + yy[j]) & clipY);
+        mean += alt((x + xx[j]) & clipX, (y + yy[j]) & clipY);
       }
       k += max;
     }
     mean = k ? Math.trunc(mean / k) : 0;
 
     const apply = (cx: number, cy: number) => {
-      const h = upAlt(cx, cy);
+      const h = alt(cx, cy);
       if (Math.abs(h - mean) < eql) {
-        if (h > mean) map.pixSet(cx, cy, -1);
-        else if (h < mean) map.pixSet(cx, cy, 1);
+        if (h > mean) pset(cx, cy, -1);
+        else if (h < mean) pset(cx, cy, 1);
       }
     };
     for (let i = 0; i <= rInner; i++) {
@@ -237,9 +243,9 @@ export function deltaZone(
     }
   } else {
     const apply = (cx: number, cy: number) => {
-      const h = upAlt(cx, cy);
+      const h = alt(cx, cy);
       const v = meanOrNeighbours(cx, cy, smode === 0);
-      map.pixSet(cx, cy, v - h);
+      pset(cx, cy, v - h);
     };
     for (let i = 0; i <= rInner; i++) {
       const max = tables.maxRad[i];

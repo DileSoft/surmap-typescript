@@ -20,6 +20,7 @@ import { saveVmc, saveVmp } from '../src/save';
 import { loadC3D, projectShape, stampShape, type ShapeOptions } from '../src/shape';
 import { VrtMap } from '../src/vmap';
 import { applyPaletteCycle, applyWaveCycle, buildPalette } from '../src/palette';
+import { DOUBLE_LEVEL, TERRAIN_OFFSET } from '../src/constants';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const dataDir = process.env.VANGERS_WORLD || path.resolve(__dirname, '../../Vangers/data/thechain/fostral');
@@ -507,5 +508,134 @@ describe('3D shape insertion', () => {
     const proj = projectShape(model, opts, 0, 0);
     const touched = proj.upper.reduce((n, v) => n + (v ? 1 : 0), 0);
     expect(touched).toBeGreaterThan(0);
+  });
+});
+
+describe('layers and materials (SURMAP RenderingLayer / CurrentTerrain)', () => {
+  const begin = [1, 32, 64, 72, 88, 104, 112, 120];
+  const end = [31, 63, 71, 87, 103, 111, 119, 127];
+  const sizeX = 2048;
+  const sizeY = 64;
+
+  function flatMap() {
+    const height = new Uint8Array(sizeX * sizeY).fill(120);
+    const meta = new Uint8Array(sizeX * sizeY);
+    for (let i = 0; i < meta.length; i++) meta[i] = 1 << TERRAIN_OFFSET; // terrain 1
+    return { sizeX, sizeY, height, meta };
+  }
+
+  test('regDownRender equals regRender when there is no double level', () => {
+    const a = new VrtMap(flatMap(), renderPrepare(begin, end, 0));
+    a.regRenderAll();
+    const upColor = a.color.slice();
+    const upMeta = a.meta.slice();
+
+    const b = new VrtMap(flatMap(), renderPrepare(begin, end, 0));
+    b.setLayer('down');
+    b.regDownRenderAll();
+
+    expect(Buffer.from(b.color).equals(Buffer.from(upColor))).toBe(true);
+    expect(Buffer.from(b.meta).equals(Buffer.from(upMeta))).toBe(true);
+  });
+
+  test('down layer edits the lower surface of a double column (pixDownSet)', () => {
+    const level = flatMap();
+    const map = new VrtMap(level, renderPrepare(begin, end, 0));
+    map.setLayer('down');
+
+    const y = 3;
+    const even = 10;
+    const odd = 11;
+    const base = y * sizeX;
+    // double column: DOUBLE_LEVEL sits on both bytes; the even one also stores
+    // the down surface, the odd one also the flag + up surface
+    map.meta[base + even] = DOUBLE_LEVEL | (1 << TERRAIN_OFFSET); // down terrain = 1
+    map.meta[base + odd] = DOUBLE_LEVEL | (2 << TERRAIN_OFFSET); // up terrain = 2
+    map.height[base + even] = 100;
+    map.height[base + odd] = 200;
+
+    map.pixSet(even, y, 10, 3); // down +10, material 3
+
+    expect(map.height[base + even]).toBe(110);
+    expect(map.height[base + odd]).toBe(200); // up untouched
+    expect(map.getDownTerrain(base + even, even)).toBe(3);
+    expect(map.getUpTerrain(base + even, even)).toBe(2); // up material untouched
+
+    // the odd column of a double pair is not editable on the down layer
+    map.pixSet(odd, y, 10, 3);
+    expect(map.height[base + odd]).toBe(200);
+  });
+
+  test('material is written on the up layer while editing', () => {
+    const map = new VrtMap(flatMap(), renderPrepare(begin, end, 0));
+    const cx = 500;
+    const cy = 32;
+    const base = cy * sizeX + cx;
+
+    expect(map.getTerrain(base, cx)).toBe(1);
+    map.deltaZone(cx, cy, 10, 0, 5, 0, 0, 4);
+    expect(map.getTerrain(base, cx)).toBe(4);
+    expect(map.height[base]).toBe(125);
+
+    // "keep" leaves the material alone
+    map.deltaZone(cx, cy, 10, 0, 5, 0, 0, -1);
+    expect(map.getTerrain(base, cx)).toBe(4);
+  });
+
+  test('editing a double column on the up layer collapses it toward the down', () => {
+    const level = flatMap();
+    const map = new VrtMap(level, renderPrepare(begin, end, 0));
+    const y = 3;
+    const even = 20;
+    const odd = 21;
+    const base = y * sizeX;
+    map.meta[base + odd] = DOUBLE_LEVEL | (1 << TERRAIN_OFFSET);
+    map.meta[base + even] = DOUBLE_LEVEL | (1 << TERRAIN_OFFSET);
+    map.height[base + even] = 100;
+    map.height[base + odd] = 200;
+    // up layer edits the odd column; lowering it far enough removes the double
+    map.setLayer('up');
+    map.pixSet(odd, y, -150);
+    expect(map.meta[base + odd] & DOUBLE_LEVEL).toBe(0);
+    expect(map.meta[base + even] & DOUBLE_LEVEL).toBe(0);
+  });
+
+  test('regRender covers a whole row; regDownRender leaves the last column', () => {
+    const height = new Uint8Array(sizeX * sizeY).fill(100);
+    const meta = new Uint8Array(sizeX * sizeY);
+    for (let y = 0; y < sizeY; y++) {
+      for (let x = 0; x < sizeX; x += 2) {
+        const i = y * sizeX + x;
+        meta[i] = DOUBLE_LEVEL | (1 << TERRAIN_OFFSET); // down
+        meta[i + 1] = DOUBLE_LEVEL | (1 << TERRAIN_OFFSET); // up
+        height[i] = 100; // down surface
+        height[i + 1] = 140; // up surface
+      }
+    }
+    const level = { sizeX, sizeY, height, meta };
+    const missed = (m: VrtMap) => {
+      const out: number[] = [];
+      for (let y = 0; y < sizeY; y++) {
+        for (let x = 0; x < sizeX; x++) if (m.color[y * sizeX + x] === 0xab) out.push(x);
+      }
+      return out;
+    };
+
+    // siderend.cpp writes `xi`/`xp` = x and x-1, so the up render is complete.
+    const up = new VrtMap(level, renderPrepare(begin, end, 0));
+    up.color.fill(0xab);
+    up.regRenderAll();
+    expect(missed(up)).toEqual([]);
+
+    // dsidernd.cpp starts downMainStage at x = HiX and, in the double branch,
+    // decrements first and writes HiX-2 / HiX-1, so the HiX column keeps its
+    // previous content. At the other end (x == 1) the decremented `pc - 1`
+    // reaches one byte before the row, which in the original flat buffer is the
+    // previous row's last pixel. So only row 0's final cell is left untouched.
+    const down = new VrtMap(level, renderPrepare(begin, end, 0));
+    down.setLayer('down');
+    down.color.fill(0xab);
+    down.regDownRenderAll();
+    expect(missed(down)).toEqual([sizeX - 1]);
   });
 });

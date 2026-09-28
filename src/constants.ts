@@ -45,6 +45,14 @@ export const SHADOWHEIGHT = 32;
 export const POSPOWER = 8;
 export const MAX_ALT = 255;
 
+// src/terra/world.h + src/iscreen/iworld.h (double-level delta encoding)
+export const MIN_RDELTA = 1 << DELTA_SHIFT; // 8
+export const MAX_RDELTA = 16 << DELTA_SHIFT; // 128
+// src/terra/land.cpp
+export const TUNNEL_PROOF = 16;
+// CURRENT_TERRAIN value that leaves the material untouched (`CurrentTerrain`).
+export const TERRAIN_KEEP = -1;
+
 // Land.cpp materials table (TERRAIN16 is not defined)
 export const MATERIAL_MAX = 2;
 export const TERRAIN_MATERIAL = [1, 0, 0, 0, 0, 0, 0, 0];

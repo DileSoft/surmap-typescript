@@ -17,6 +17,8 @@ import {
   H_CORRECTION,
   H_SIZE,
   MAX_ALT,
+  MAX_RDELTA,
+  MIN_RDELTA,
   OBJSHADOW,
   POSPOWER,
   SHADOWDEEP,
@@ -25,6 +27,7 @@ import {
   SS_WIDTH,
   TERRAIN_MASK,
   TERRAIN_OFFSET,
+  TUNNEL_PROOF,
   xcycl,
 } from './constants';
 import { deltaZone, type EditableMap } from './edit';
@@ -32,6 +35,9 @@ import type { LevelData } from './loader';
 import type { Luts } from './luts';
 
 const SHADOW_PARENT_SIZE = 4 * H_SIZE; // RenderPrepare: new uchar[4 * map_size_x]
+
+/** Which terrain layer is shown/edited (`RenderingLayer` in SURMAP). */
+export type Layer = 'up' | 'down';
 
 interface StageResult {
   hC: number;
@@ -57,6 +63,9 @@ export class VrtMap {
 
   readonly luts: Luts;
   private readonly sp: Uint8Array;
+
+  /** Current layer: shown and edited (`RenderingLayer`). */
+  private layer: Layer = 'up';
 
   constructor(level: LevelData, luts: Luts) {
     this.sizeX = level.sizeX;
@@ -97,6 +106,14 @@ export class VrtMap {
   // land.cpp : editing primitives (SURMAP build)
   // ---------------------------------------------------------------------------
 
+  setLayer(layer: Layer): void {
+    this.layer = layer;
+  }
+
+  get currentLayer(): Layer {
+    return this.layer;
+  }
+
   /** `GET_UP_ALT`: height shown on top at `index` (column `x`). */
   getUpAlt(index: number, x: number): number {
     const { height, meta } = this;
@@ -116,13 +133,71 @@ export class VrtMap {
     return height[index];
   }
 
+  /** Altitude of the current layer (`GETUPALT`/`GETDOWNALT`). */
+  getAlt(index: number, x: number): number {
+    return this.layer === 'down' ? this.getDownAlt(index, x) : this.getUpAlt(index, x);
+  }
+
+  /** `GET_REAL_TERRAIN`: up material at `index` (column `x`). */
+  getUpTerrain(index: number, x: number): number {
+    const { meta } = this;
+    if (x & 1) return (meta[index] & TERRAIN_MASK) >> TERRAIN_OFFSET;
+    if (meta[index] & DOUBLE_LEVEL) return (meta[index + 1] & TERRAIN_MASK) >> TERRAIN_OFFSET;
+    return (meta[index] & TERRAIN_MASK) >> TERRAIN_OFFSET;
+  }
+
+  /** `GET_REAL_DOWNTERRAIN`: down material at `index` (column `x`). */
+  getDownTerrain(index: number, x: number): number {
+    const { meta } = this;
+    if (meta[index] & DOUBLE_LEVEL) {
+      if (!(x & 1)) return (meta[index] & TERRAIN_MASK) >> TERRAIN_OFFSET;
+      return (meta[index - 1] & TERRAIN_MASK) >> TERRAIN_OFFSET;
+    }
+    return (meta[index] & TERRAIN_MASK) >> TERRAIN_OFFSET;
+  }
+
+  /** Material of the current layer. */
+  getTerrain(index: number, x: number): number {
+    return this.layer === 'down' ? this.getDownTerrain(index, x) : this.getUpTerrain(index, x);
+  }
+
+  /** `SET_REAL_TERRAIN` (only writes where the up material lives). */
+  private setUpTerrain(index: number, x: number, t: number): void {
+    const { meta } = this;
+    const v = ((t << TERRAIN_OFFSET) & TERRAIN_MASK) >>> 0;
+    if (meta[index] & DOUBLE_LEVEL) {
+      if (x & 1) meta[index] = (meta[index] & ~TERRAIN_MASK) | v;
+    } else {
+      meta[index] = (meta[index] & ~TERRAIN_MASK) | v;
+    }
+  }
+
+  /** `SET_REAL_DOWNTERRAIN` (only writes where the down material lives). */
+  private setDownTerrain(index: number, x: number, t: number): void {
+    const { meta } = this;
+    const v = ((t << TERRAIN_OFFSET) & TERRAIN_MASK) >>> 0;
+    if (meta[index] & DOUBLE_LEVEL) {
+      if (!(x & 1)) meta[index] = (meta[index] & ~TERRAIN_MASK) | v;
+    } else {
+      meta[index] = (meta[index] & ~TERRAIN_MASK) | v;
+    }
+  }
+
   /**
-   * Port of `pixSet` (src/terra/land.cpp) for the game/SURMAP height path:
-   * adds `delta` to the voxel height, handling double-level columns and
-   * clamping to 0..255 (`LandBounded`). Terrain is left untouched (`surf = 0`).
+   * `pixSet` dispatcher: edits whichever layer is current. `material >= 0`
+   * writes the SURMAP `CurrentTerrain` to the touched voxels of that layer.
    */
-  pixSet(x: number, y: number, delta: number): void {
+  pixSet(x: number, y: number, delta: number, material = -1): void {
     if (!delta) return;
+    if (this.layer === 'down') this.pixDownSet(x, y, delta, material);
+    else this.pixUpSet(x, y, delta, material);
+  }
+
+  /**
+   * Port of `pixSet` (src/terra/land.cpp) for the up layer: adds `delta` to the
+   * voxel height, handling double-level columns and clamping to 0..255.
+   */
+  private pixUpSet(x: number, y: number, delta: number, material = -1): void {
     const { height, meta } = this;
     const base = y * H_SIZE + x;
     let h = this.getUpAlt(base, x);
@@ -151,11 +226,64 @@ export class VrtMap {
     if (h < 0) h = 0;
     else if (h > 255) h = 255;
     height[base] = h;
+
+    if (material >= 0) this.setUpTerrain(base, x, material);
+  }
+
+  /**
+   * Port of `pixDownSet` (src/terra/land.cpp) for the down layer: edits the
+   * lower surface of a double-level column and maintains the tunnel delta.
+   */
+  private pixDownSet(x: number, y: number, delta: number, material = -1): void {
+    const { height, meta } = this;
+    const base = y * H_SIZE + x;
+    let h = this.getDownAlt(base, x);
+
+    if (meta[base] & DOUBLE_LEVEL) {
+      if (!(x & 1)) {
+        h += delta;
+        let t = height[base + 1] - TUNNEL_PROOF - h;
+        if (t < 0) t = 0;
+        t &= ~(MIN_RDELTA - 1);
+        if (t <= MIN_RDELTA) {
+          meta[base] &= ~DOUBLE_LEVEL;
+          meta[base + 1] &= ~DOUBLE_LEVEL;
+          meta[base] = (meta[base] & ~TERRAIN_MASK) | (meta[base + 1] & TERRAIN_MASK);
+          h = height[base + 1];
+          meta[base] &= ~DELTA_MASK;
+          meta[base + 1] &= ~DELTA_MASK;
+        } else {
+          if (t > MAX_RDELTA) t = MAX_RDELTA;
+          t = (t >> DELTA_SHIFT) - 1;
+          meta[base] = (meta[base] & ~DELTA_MASK) | ((t & 12) >> 2);
+          meta[base + 1] = (meta[base + 1] & ~DELTA_MASK) | (t & 3);
+        }
+      } else {
+        return;
+      }
+    } else {
+      h += delta;
+    }
+
+    if (h < 0) h = 0;
+    else if (h > 255) h = 255;
+    height[base] = h;
+
+    if (material >= 0) this.setDownTerrain(base, x, material);
   }
 
   /** Port of `deltaZone` (the SURMAP Toolzer): a round hill/pit. */
-  deltaZone(x: number, y: number, rad: number, smth: number, dh: number, smode = 0, eql = 0): void {
-    deltaZone(this as EditableMap, x, y, rad, smth, dh, smode, eql);
+  deltaZone(
+    x: number,
+    y: number,
+    rad: number,
+    smth: number,
+    dh: number,
+    smode = 0,
+    eql = 0,
+    material = -1,
+  ): void {
+    deltaZone(this as EditableMap, x, y, rad, smth, dh, smode, eql, material);
   }
 
   // ---------------------------------------------------------------------------
@@ -616,6 +744,390 @@ export class VrtMap {
         x = H_SIZE - 1;
       } else {
         x = xcycl(x - 2);
+      }
+    }
+  }
+
+  // ---------------------------------------------------------------------------
+  // surmap/dsidernd.cpp : regDownRender (the lower layer)
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Renders (and updates shadow bits for) an inclusive region of the down layer.
+   * Port of `regDownRender` (surmap/dsidernd.cpp). Note: there is no separate
+   * LINE_render for the down layer in the original, so the down layer is always
+   * drawn with this routine.
+   *
+   * Like the original, `downMainStage` starts at `x = HiX` and, in the
+   * double-level branch, steps back before writing `HiX-2` / `HiX-1`; the `HiX`
+   * column itself is not repainted and keeps its previous colour. At the far end
+   * (`x == 1`) the decremented pointer reaches one byte before the row, which in
+   * the original flat buffer is the previous row's last pixel. Both quirks are
+   * reproduced verbatim from `dsidernd.cpp`.
+   */
+  regDownRender(lowX: number, lowY: number, hiX: number, hiY: number): void {
+    lowX = xcycl(lowX);
+    hiX = xcycl(hiX);
+    lowY = lowY & this.clipMaskY;
+    hiY = hiY & this.clipMaskY;
+
+    lowX &= ~1;
+    hiX |= 1;
+
+    const sizeY = lowY === hiY ? this.sizeY : (hiY - lowY) & this.clipMaskY;
+    const dx = xcycl(hiX - lowX);
+    const sizeX = dx === 0 ? H_SIZE : dx;
+
+    const { sp } = this;
+    for (let j = 0; j < sizeY; j++) {
+      const y = (j + lowY) & this.clipMaskY;
+      const base = y * H_SIZE;
+
+      sp.fill(0, MAX_ALT, ((sizeX * SHADOWDEEP) >> POSPOWER) + 2 * MAX_ALT + MAX_ALT);
+
+      let hC = MAX_ALT;
+      let lastStep = (H_SIZE - 1 - hiX) * SHADOWDEEP;
+      lastStep -= ((lastStep >> POSPOWER) - MAX_ALT) << POSPOWER;
+
+      hC = this.downPreStage(base, hiX, lastStep, hC).hC;
+
+      const main = this.downMainStage(base, sizeX, hiX, hC, MAX_ALT, 0);
+      this.downPostStage(base, main.x, main.hC, main.grid, main.maxAlt);
+    }
+  }
+
+  /** Renders every row of the down layer with regDownRender. */
+  regDownRenderAll(): void {
+    for (let y = 0; y < this.sizeY; y++) {
+      this.regDownRender(0, y, H_SIZE - 1, y + 1);
+    }
+  }
+
+  // --- dsidernd.cpp : downPreStage ------------------------------------------
+  private downPreStage(
+    base: number,
+    hiX: number,
+    lastStepIn: number,
+    hCIn: number,
+  ): { hC: number } {
+    const { height, meta, sp } = this;
+    let lastStep = lastStepIn;
+    let hC = hCIn;
+    let maskShift = lastStep >> POSPOWER;
+    let x = xcycl(hiX + 1);
+
+    while (hC - maskShift < MAX_ALT) {
+      if (meta[base + x] & DOUBLE_LEVEL) {
+        const dh = height[base + x] + maskShift;
+        lastStep -= SHADOWDEEP;
+        maskShift = lastStep >> POSPOWER;
+        const h = height[base + xcycl(x + 1)] + maskShift;
+        if (hC < dh) {
+          memset(sp, hC, dh - hC);
+          hC = dh;
+        }
+      } else {
+        let h = height[base + x] + maskShift;
+        if (hC < h) {
+          memset(sp, hC, h - hC);
+          hC = h;
+        }
+        lastStep -= SHADOWDEEP;
+        maskShift = lastStep >> POSPOWER;
+        h = height[base + xcycl(x + 1)] + maskShift;
+        if (hC < h) {
+          memset(sp, hC, h - hC);
+          hC = h;
+        }
+      }
+      lastStep -= SHADOWDEEP;
+      maskShift = lastStep >> POSPOWER;
+      x = xcycl(x + 2);
+    }
+
+    return { hC: hC - MAX_ALT };
+  }
+
+  // --- dsidernd.cpp : downMainStage -----------------------------------------
+  private downMainStage(
+    base: number,
+    sizeX: number,
+    xIn: number,
+    hCIn: number,
+    gridIn: number,
+    maxAltIn: number,
+  ): StageResult {
+    const { height, meta, color, sp, luts } = this;
+    const { lightCLR, palCLR, FloodLEVEL } = luts;
+
+    let hC = hCIn;
+    let x = xIn;
+    let grid = gridIn;
+    let maxAlt = maxAltIn;
+    let pa = x;
+    let pc = x;
+    let typeC = 0xff;
+    let pal = palCLR[0];
+    let light = lightCLR[0];
+
+    for (let i = 0; i < sizeX; i += 2) {
+      if (meta[base + pa] & DOUBLE_LEVEL) {
+        pa--;
+        pc--;
+        const lxVal = height[base + pa];
+        const rxVal = height[base + xcycl(x + 1)];
+        const h = height[base + pa];
+        const dh = height[base + pa];
+        const type = (meta[base + pa] & TERRAIN_MASK) >> TERRAIN_OFFSET;
+        const level = type ? h : FloodLEVEL;
+        if (type !== typeC) {
+          typeC = type;
+          pal = palCLR[type];
+          light = lightCLR[type];
+        }
+
+        grid += 3;
+        hC -= 3;
+        maxAlt -= 3;
+
+        if (sp[grid + level]) {
+          meta[base + pa] |= SHADOW_MASK;
+          meta[base + pa - 1] |= SHADOW_MASK;
+          const v = pal[
+            256 + ((light[255 - (lxVal - rxVal)] - ((255 - h) >> H_CORRECTION)) >> 1)
+          ];
+          color[base + pc - 1] = v;
+          color[base + pc] = v;
+        } else {
+          meta[base + pa] &= ~SHADOW_MASK;
+          meta[base + pa - 1] &= ~SHADOW_MASK;
+          const v = pal[256 + light[255 - (lxVal - rxVal)] - ((255 - h) >> H_CORRECTION)];
+          color[base + pc - 1] = v;
+          color[base + pc] = v;
+        }
+
+        if (dh > hC) {
+          memset(sp, grid + hC, dh - hC);
+          hC = dh;
+        }
+        if (h > maxAlt) maxAlt = h;
+      } else {
+        let lxVal = height[base + pa - 1];
+        let rxVal = height[base + xcycl(x + 1)];
+        let h = height[base + pa];
+        let type = (meta[base + pa] & TERRAIN_MASK) >> TERRAIN_OFFSET;
+        let level = type ? h : FloodLEVEL;
+
+        grid += 1;
+        hC -= 1;
+        maxAlt -= 1;
+        if (type !== typeC) {
+          typeC = type;
+          pal = palCLR[type];
+          light = lightCLR[type];
+        }
+
+        if (sp[grid + level]) {
+          meta[base + pa] |= SHADOW_MASK;
+          color[base + pc] = pal[
+            256 + ((light[255 - (lxVal - rxVal)] - ((255 - h) >> H_CORRECTION)) >> 1)
+          ];
+        } else {
+          meta[base + pa] &= ~SHADOW_MASK;
+          color[base + pc] = pal[256 + light[255 - (lxVal - rxVal)] - ((255 - h) >> H_CORRECTION)];
+        }
+        if (h > hC) {
+          memset(sp, grid + hC, h - hC);
+          hC = h;
+        }
+        if (h > maxAlt) maxAlt = h;
+
+        pa--;
+        pc--;
+        rxVal = h;
+        h = lxVal;
+        lxVal = height[base + xcycl(x - 2)];
+        grid += 2;
+        hC -= 2;
+        maxAlt -= 2;
+        type = (meta[base + pa] & TERRAIN_MASK) >> TERRAIN_OFFSET;
+        level = type ? h : FloodLEVEL;
+        if (type !== typeC) {
+          typeC = type;
+          pal = palCLR[type];
+          light = lightCLR[type];
+        }
+
+        if (sp[grid + level]) {
+          meta[base + pa] |= SHADOW_MASK;
+          color[base + pc] = pal[
+            256 + ((light[255 - (lxVal - rxVal)] - ((255 - h) >> H_CORRECTION)) >> 1)
+          ];
+        } else {
+          meta[base + pa] &= ~SHADOW_MASK;
+          color[base + pc] = pal[256 + light[255 - (lxVal - rxVal)] - ((255 - h) >> H_CORRECTION)];
+        }
+        if (h > hC) {
+          memset(sp, grid + hC, h - hC);
+          hC = h;
+        }
+        if (h > maxAlt) maxAlt = h;
+      }
+
+      if (x === 1) {
+        x = H_SIZE - 1;
+        pa = x;
+        pc = x;
+      } else {
+        x -= 2;
+        pa--;
+        pc--;
+      }
+    }
+
+    return { hC, x, grid, maxAlt };
+  }
+
+  // --- dsidernd.cpp : down post pass ----------------------------------------
+  private downPostStage(
+    base: number,
+    xIn: number,
+    hCIn: number,
+    gridIn: number,
+    maxAltIn: number,
+  ): void {
+    const { height, meta, color, sp, luts } = this;
+    const { lightCLR, palCLR, FloodLEVEL } = luts;
+
+    let x = xIn | 1;
+    let hC = hCIn;
+    let grid = gridIn;
+    let maxAlt = maxAltIn;
+    let pa = x;
+    let pc = x;
+    let typeC = 0xff;
+    let pal = palCLR[0];
+    let light = lightCLR[0];
+
+    let maxPossibleAlt = MAX_ALT;
+    let bNeedScan = true;
+    while (bNeedScan && maxPossibleAlt >= 0) {
+      bNeedScan = false;
+      if (meta[base + pa] & DOUBLE_LEVEL) {
+        pa--;
+        pc--;
+        const lxVal = height[base + pa];
+        const rxVal = height[base + xcycl(x + 1)];
+        const h = height[base + pa];
+        const dh = height[base + pa];
+        const type = (meta[base + pa] & TERRAIN_MASK) >> TERRAIN_OFFSET;
+        const level = type ? h : FloodLEVEL;
+        if (type !== typeC) {
+          typeC = type;
+          pal = palCLR[type];
+          light = lightCLR[type];
+        }
+
+        grid += 3;
+        hC -= 3;
+        maxAlt -= 3;
+        maxPossibleAlt -= 3;
+        if (dh < maxAlt || meta[base + pa] & SHADOW_MASK) bNeedScan = true;
+
+        if (sp[grid + level]) {
+          meta[base + pa] |= SHADOW_MASK;
+          meta[base + pa - 1] |= SHADOW_MASK;
+          const v = pal[
+            256 + ((light[255 - (lxVal - rxVal)] - ((255 - h) >> H_CORRECTION)) >> 1)
+          ];
+          color[base + pc - 1] = v;
+          color[base + pc] = v;
+        } else {
+          meta[base + pa] &= ~SHADOW_MASK;
+          meta[base + pa - 1] &= ~SHADOW_MASK;
+          const v = pal[256 + light[255 - (lxVal - rxVal)] - ((255 - h) >> H_CORRECTION)];
+          color[base + pc - 1] = v;
+          color[base + pc] = v;
+        }
+
+        if (meta[base + pa] & SHADOW_MASK) bNeedScan = true;
+        if (dh > hC) {
+          memset(sp, grid + hC, dh - hC);
+          hC = dh;
+        }
+      } else {
+        let lxVal = height[base + pa - 1];
+        let rxVal = height[base + xcycl(x + 1)];
+        let h = height[base + pa];
+        let type = (meta[base + pa] & TERRAIN_MASK) >> TERRAIN_OFFSET;
+        let level = type ? h : FloodLEVEL;
+
+        grid += 1;
+        hC -= 1;
+        maxAlt -= 1;
+        maxPossibleAlt -= 1;
+        if (type !== typeC) {
+          typeC = type;
+          pal = palCLR[type];
+          light = lightCLR[type];
+        }
+
+        if (h <= maxAlt || meta[base + pa] & SHADOW_MASK) bNeedScan = true;
+        if (sp[grid + level]) {
+          meta[base + pa] |= SHADOW_MASK;
+          color[base + pc] = pal[
+            256 + ((light[255 - (lxVal - rxVal)] - ((255 - h) >> H_CORRECTION)) >> 1)
+          ];
+        } else {
+          meta[base + pa] &= ~SHADOW_MASK;
+          color[base + pc] = pal[256 + light[255 - (lxVal - rxVal)] - ((255 - h) >> H_CORRECTION)];
+        }
+        if (h > hC) {
+          memset(sp, grid + hC, h - hC);
+          hC = h;
+        }
+
+        pa--;
+        pc--;
+        rxVal = h;
+        h = lxVal;
+        lxVal = height[base + xcycl(x - 2)];
+        grid += 2;
+        hC -= 2;
+        maxAlt -= 2;
+        maxPossibleAlt -= 2;
+        type = (meta[base + pa] & TERRAIN_MASK) >> TERRAIN_OFFSET;
+        level = type ? h : FloodLEVEL;
+        if (type !== typeC) {
+          typeC = type;
+          pal = palCLR[type];
+          light = lightCLR[type];
+        }
+
+        if (h <= maxAlt || meta[base + pa] & SHADOW_MASK) bNeedScan = true;
+        if (sp[grid + level]) {
+          meta[base + pa] |= SHADOW_MASK;
+          color[base + pc] = pal[
+            256 + ((light[255 - (lxVal - rxVal)] - ((255 - h) >> H_CORRECTION)) >> 1)
+          ];
+        } else {
+          meta[base + pa] &= ~SHADOW_MASK;
+          color[base + pc] = pal[256 + light[255 - (lxVal - rxVal)] - ((255 - h) >> H_CORRECTION)];
+        }
+        if (h > hC) {
+          memset(sp, grid + hC, h - hC);
+          hC = h;
+        }
+      }
+
+      if (x === 1) {
+        x = H_SIZE - 1;
+        pa = x;
+        pc = x;
+      } else {
+        x = xcycl(x - 2);
+        pa--;
+        pc--;
       }
     }
   }
