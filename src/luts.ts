@@ -14,7 +14,7 @@ import {
   TERRAIN_MATERIAL,
   TERRAIN_MAX,
   TERRAIN_SDKOEF,
-} from './constants.js';
+} from './constants';
 
 export interface Luts {
   lightCLR: Uint8Array[];

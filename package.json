@@ -5,12 +5,23 @@
   "type": "module",
   "description": "Exact TypeScript/Canvas port of Vangers terrain (VMP/VMC) surface rendering",
   "scripts": {
-    "build": "tsc",
-    "watch": "tsc -w",
-    "serve": "node server.mjs",
-    "test": "node test/loader.test.mjs"
+    "dev": "vite",
+    "build": "tsc --noEmit && vite build",
+    "preview": "vite preview",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
   },
   "devDependencies": {
-    "typescript": "^5.6.3"
+    "@types/node": "^26.6.3",
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
+    "@vitejs/plugin-react": "^6.1.1",
+    "typescript": "^5.6.3",
+    "vite": "^8.3.1",
+    "vitest": "^5.0.2"
+  },
+  "dependencies": {
+    "react": "^19.3.0",
+    "react-dom": "^19.3.0"
   }
 }

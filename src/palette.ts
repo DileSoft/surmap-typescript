@@ -8,7 +8,7 @@
  *   - the object palette (> ENDCOLOR[last]) is replaced (optional here)
  * and finally `XGR_SetPal` scales the 6-bit values by 4 (vange-rs does `<< 2`).
  */
-import { TERRAIN_MAX } from './constants.js';
+import { TERRAIN_MAX } from './constants';
 
 export interface Palette {
   /** 768 bytes of 6-bit RGB (corrected, not yet scaled). */

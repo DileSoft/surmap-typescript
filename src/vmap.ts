@@ -24,9 +24,9 @@ import {
   TERRAIN_MASK,
   TERRAIN_OFFSET,
   xcycl,
-} from './constants.js';
-import type { LevelData } from './loader.js';
-import type { Luts } from './luts.js';
+} from './constants';
+import type { LevelData } from './loader';
+import type { Luts } from './luts';
 
 const SHADOW_PARENT_SIZE = 4 * H_SIZE; // RenderPrepare: new uchar[4 * map_size_x]
 
@@ -43,7 +43,10 @@ export class VrtMap {
   readonly clipMaskY: number;
 
   readonly height: Uint8Array;
+  /** Flag bytes. `regRender` rewrites the SHADOW/OBJSHADOW bits here. */
   readonly meta: Uint8Array;
+  /** Snapshot of `meta` as loaded, so `regRender` edits can be undone. */
+  private readonly metaOriginal: Uint8Array;
   /** Per-voxel surface palette index (`lineTcolor`). */
   readonly color: Uint8Array;
 
@@ -56,9 +59,15 @@ export class VrtMap {
     this.clipMaskY = level.sizeY - 1;
     this.height = level.height;
     this.meta = level.meta;
+    this.metaOriginal = level.meta.slice();
     this.color = new Uint8Array(level.sizeX * level.sizeY);
     this.luts = luts;
     this.sp = new Uint8Array(SHADOW_PARENT_SIZE);
+  }
+
+  /** Restores the flag bytes to their as-loaded state. */
+  resetMeta(): void {
+    this.meta.set(this.metaOriginal);
   }
 
   // ---------------------------------------------------------------------------

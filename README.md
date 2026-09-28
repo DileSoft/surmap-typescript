@@ -1,9 +1,9 @@
 # surmap-typescript
 
 Точный порт построения поверхности миров Vangers (VMP/VMC → **vmap** → `lineTcolor`)
-на TypeScript для браузера (canvas). Реализация повторяет оригинальный C++ из репозитория
-[Vangers](https://github.com/caiiiycuk/Vangers) один-в-один, включая целочисленную
-фиксированную арифметику.
+на TypeScript, интерфейс — **Vite + React**, вывод — canvas. Реализация повторяет
+оригинальный C++ из репозитория [Vangers](https://github.com/caiiiycuk/Vangers)
+один-в-один, включая целочисленную фиксированную арифметику.
 
 ## Что портировано
 
@@ -24,17 +24,21 @@
 
 ```
 src/
-  constants.ts   битовые маски и константы (world.h/render.h/common.h)
-  ini.ts         разбор world.ini
-  huffman.ts     VMC-декодер (два дерева Хаффмана: дельта + XOR)
-  loader.ts      VMP/VMC/VPR/palette
-  luts.ts        RenderPrepare (lightCLR / palCLR)
-  vmap.ts        VrtMap: LINE_render + regRender
-  palette.ts     индекс палитры -> RGBA
-  main.ts        браузерный вьюер (ленивый рендер строк, зум/панорама)
+  constants.ts     битовые маски и константы (world.h/render.h/common.h)
+  ini.ts           разбор world.ini
+  huffman.ts       VMC-декодер (два дерева Хаффмана: дельта + XOR)
+  loader.ts        VMP/VMC/VPR/palette
+  luts.ts          RenderPrepare (lightCLR / palCLR)
+  vmap.ts          VrtMap: LINE_render + regRender
+  palette.ts       индекс палитры -> RGBA
+  viewer/viewer.ts канвас-вьюер (ленивый рендер строк, зум/панорама)
+  App.tsx          UI на React (файлы, режимы, кнопки)
+  main.tsx         точка входа React
+  style.css
 index.html
+vite.config.ts     React-плагин + раздача VANGERS_DATA под /@data/
 test/
-  loader.test.mjs  загрузка реального мира fostral, проверки и превью PNG
+  loader.test.ts   Vitest: декод реального мира fostral, инварианты, PNG-превью
   debug-vmc.mjs    утилита разбора заголовка/таблиц VMC
 ```
 
@@ -42,44 +46,47 @@ test/
 
 ```sh
 npm install
-npm run build          # tsc -> dist/
-
-# вариант 1: выбрать файлы в браузере
-npm run serve          # http://localhost:8080/
-
-# вариант 2: отдать каталог с данными Vangers и открыть автозагрузку
-# (PowerShell)
-$env:VANGERS_DATA='D:\...\Vangers\data'; node server.mjs 8099
-# затем: http://localhost:8099/?data=/@data/thechain/fostral/
+npm run dev        # Vite dev-сервер, http://localhost:5173/
+npm run build      # tsc --noEmit && vite build -> dist/
+npm run preview    # предпросмотр production-сборки
+npm test           # Vitest
+npm run typecheck  # tsc --noEmit
 ```
 
-Нужные файлы мира: `world.ini`, `output.vmp|vmc`, `output.vpr`, `harmony.pal`.
+### Данные мира
+В браузере выберите `world.ini`, `output.vmp|vmc`, `output.vpr`, `harmony.pal`.
+
+Либо отдайте каталог с данными Vangers и откройте автозагрузку. `vite.config.ts`
+публикует `<VANGERS_DATA>` read-only под `/@data/`:
+
+```powershell
+$env:VANGERS_DATA='D:\...\Vangers\data'; npm run dev
+# затем: http://localhost:5173/?data=/@data/thechain/fostral/
+```
 
 ## Проверка
 
-```sh
-npm test
-```
-
-Тест загружает `data/thechain/fostral`, декодирует 16384 строки VMC и проверяет,
+Vitest загружает `data/thechain/fostral`, декодирует 16384 строки VMC и проверяет,
 что каждая строка потребляет **ровно** `sz_table[i]` байт (сильный инвариант
-корректности Хаффман-декодера), затем рендерит поверхность и пишет превью в
-`test/out/`.
-
-Результаты на fostral (hash = FNV-1a 32):
+корректности Хаффман-декодера), затем рендерит поверхность и сверяет хэши:
 
 | | color | meta |
 |---|---|---|
-| `LINE_render` | `fed77a5d` | — |
+| `LINE_render` (до `regRender`) | `fed77a5d` | — |
 | `regRender` | `ac09fd4a` | `f65beb57` |
 
-Браузерный вьюер даёт **те же** хэши, что и Node-тест (совпадение проверено через
-`window.__map`), т.е. canvas-вывод использует идентичный код.
+Хэши зафиксированы как регрессионный baseline. Превью пишутся в `test/out/`.
+Те же значения воспроизводятся в браузере (проверено через `window.__map` в dev).
 
 ## Замечания по точности
 
 - Вся арифметика целочисленная 32-битная; вместо `%` используется `& clip_mask`
   (`XCYCL`/`YCYCL`).
+- **Смысл переключателя рендера.** `regRender` пересчитывает и перезаписывает
+  биты `SHADOW`/`OBJSHADOW` в `meta`. `LINE_render` их только читает, поэтому
+  после `regRender` он дал бы ту же картинку. Вьюер при смене режима вызывает
+  `VrtMap.resetMeta()` и восстанавливает исходные (из файла) биты, чтобы
+  `LINE_render` показывал затенение, записанное в самой карте.
 - Горизонтальные «закольцованные» обращения к соседям сделаны через
   `x & (H_SIZE-1)`. В оригинале часть обращений (`*(pa+1)`, `*(pa-1)`) выходит за
   границы строки — это неопределённое поведение, которое не воспроизводится;

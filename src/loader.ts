@@ -4,9 +4,9 @@
  *   src/terra/splay.cpp  (InitSplay / ExpandBuffer)
  * Cross-checked against vange-rs `src/level/mod.rs`.
  */
-import { H_SIZE, MAP_POWER_X, TERRAIN_MAX } from './constants.js';
-import { VmcDecoder } from './huffman.js';
-import { iniGet, iniGetInt, parseIntList, parseIni, type Ini } from './ini.js';
+import { H_SIZE, MAP_POWER_X, TERRAIN_MAX } from './constants';
+import { VmcDecoder } from './huffman';
+import { iniGet, iniGetInt, parseIntList, parseIni, type Ini } from './ini';
 
 export interface WorldConfig {
   mapPowerX: number;

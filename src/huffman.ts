@@ -7,7 +7,7 @@
  *   line2 (flags)   : out[i] = (out[i-1] ^ delta) & 0xFF
  * Each pass expands exactly H_SIZE (=2048) bytes.
  */
-import { H_SIZE } from './constants.js';
+import { H_SIZE } from './constants';
 
 const TREE_ENTRIES = 512;
 
