@@ -122,7 +122,7 @@ code {
   padding: 0 4px;
 }
 
-/* "?" tooltip */
+/* "?" tooltip — viewport-positioned, so the scrolling ribbon cannot clip it */
 .tip {
   position: relative;
   display: inline-flex;
@@ -145,12 +145,14 @@ code {
 }
 
 .tip-pop {
-  position: absolute;
-  top: 135%;
+  position: fixed;
+  top: 0;
   left: 0;
-  z-index: 30;
+  z-index: 1000;
   width: 360px;
-  max-width: 72vw;
+  max-width: calc(100vw - 16px);
+  max-height: calc(100vh - 16px);
+  overflow: auto;
   background: #1c2230;
   border: 1px solid var(--line-2);
   border-radius: 6px;
@@ -158,13 +160,14 @@ code {
   color: #c2cad9;
   line-height: 1.5;
   box-shadow: 0 8px 22px rgba(0, 0, 0, 0.45);
-  display: none;
+  /* Hidden but still laid out, so its size can be measured before showing. */
+  visibility: hidden;
+  pointer-events: none;
 }
 
-.tip:hover .tip-pop,
-.tip:focus .tip-pop,
-.tip:focus-within .tip-pop {
-  display: block;
+.tip-pop.open {
+  visibility: visible;
+  pointer-events: auto;
 }
 
 label {

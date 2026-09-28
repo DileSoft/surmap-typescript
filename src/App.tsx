@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { loadPalette, loadVmc, loadVmp, loadVpr, parseWorldConfig, type WorldConfig } from './loader';
 import { renderPrepare } from './luts';
 import { applyPaletteCycle, applyWaveCycle, buildPalette, type Palette } from './palette';
@@ -62,14 +62,71 @@ function mergePalettes(base: PaletteFile[], added: PaletteFile[]): PaletteFile[]
   return [...map.values()];
 }
 
-/** Round "?" icon that reveals a tooltip on hover/focus. */
+/**
+ * Round "?" icon that reveals a tooltip on hover/focus.
+ *
+ * The bubble is `position: fixed` and placed with viewport coordinates: the
+ * ribbon panel scrolls horizontally (`overflow-x: auto`), which also clips
+ * vertically, so an absolutely-positioned bubble would be cut off. It flips above
+ * the icon when there is no room below and is clamped inside the viewport.
+ */
 function Hint({ children }: { children: ReactNode }) {
+  const [open, setOpen] = useState(false);
+  const [pos, setPos] = useState({ top: 0, left: 0 });
+  const iconRef = useRef<HTMLSpanElement>(null);
+  const popRef = useRef<HTMLSpanElement>(null);
+
+  const place = useCallback(() => {
+    const icon = iconRef.current;
+    const pop = popRef.current;
+    if (!icon || !pop) return;
+    const box = icon.getBoundingClientRect();
+    const width = pop.offsetWidth;
+    const height = pop.offsetHeight;
+    const gap = 10;
+    const margin = 8;
+
+    let top = box.bottom + gap;
+    if (top + height > window.innerHeight - margin) {
+      const above = box.top - gap - height;
+      top = above >= margin ? above : Math.max(margin, window.innerHeight - margin - height);
+    }
+    const left = Math.max(margin, Math.min(box.left, window.innerWidth - margin - width));
+    setPos({ top, left });
+  }, []);
+
+  useLayoutEffect(() => {
+    if (!open) return;
+    place();
+    const reposition = () => place();
+    window.addEventListener('resize', reposition);
+    window.addEventListener('scroll', reposition, true);
+    return () => {
+      window.removeEventListener('resize', reposition);
+      window.removeEventListener('scroll', reposition, true);
+    };
+  }, [open, place]);
+
   return (
-    <span className="tip" tabIndex={0}>
-      <span className="tip-icon" aria-hidden="true">
+    <span
+      className="tip"
+      tabIndex={0}
+      onMouseEnter={() => setOpen(true)}
+      onMouseLeave={() => setOpen(false)}
+      onFocus={() => setOpen(true)}
+      onBlur={() => setOpen(false)}
+    >
+      <span className="tip-icon" ref={iconRef} aria-hidden="true">
         ?
       </span>
-      <span className="tip-pop">{children}</span>
+      <span
+        className={'tip-pop' + (open ? ' open' : '')}
+        ref={popRef}
+        role="tooltip"
+        style={{ top: pos.top, left: pos.left }}
+      >
+        {children}
+      </span>
     </span>
   );
 }
