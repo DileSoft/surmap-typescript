@@ -17,8 +17,8 @@ export type DebugMode =
   | 'objshadow'
   | 'doublebits';
 
-/** Terrain editor tool, mirroring the SURMAP Toolzer modes. */
-export type EditTool = 'off' | 'mountain' | 'depression' | 'smooth';
+/** Terrain editor tool, mirroring the SURMAP Toolzer modes + 3D shape stamp. */
+export type EditTool = 'off' | 'mountain' | 'depression' | 'smooth' | 'shape';
 
 export interface EditOptions {
   tool: EditTool;
@@ -32,11 +32,14 @@ export interface EditOptions {
   smode: number;
   /** Smoothing threshold for the `smooth` tool. */
   equDelta: number;
+  /** Footprint of the loaded 3D shape (for the placement preview). */
+  shapeFootprint?: { x: number; y: number; size: number } | null;
 }
 
 export interface ViewerCallbacks {
   onInfo?: (text: string) => void;
   onCursor?: (text: string) => void;
+  onShapePlace?: (x: number, y: number) => void;
 }
 
 type DragMode = 'none' | 'pan' | 'paint';
@@ -207,7 +210,7 @@ export class Viewer {
   /** Applies the active edit tool at a screen position. */
   applyEditAt(px: number, py: number): void {
     const map = this.map;
-    if (!map || this.edit.tool === 'off') return;
+    if (!map || this.edit.tool === 'off' || this.edit.tool === 'shape') return;
     const { x, y } = this.screenToMap(px, py);
     if (x < 0 || y < 0 || x >= map.sizeX || y >= map.sizeY) return;
 
@@ -314,12 +317,31 @@ export class Viewer {
     ctx.putImageData(this.lastImage, 0, 0);
 
     const { x, y } = this.screenToMap(px, py);
+
+    ctx.save();
+    ctx.lineWidth = 1;
+
+    if (this.edit.tool === 'shape') {
+      const fp = this.edit.shapeFootprint;
+      const sx = (x + (fp?.x ?? 0) - this.offsetX) * this.scale;
+      const sy = (y + (fp?.y ?? 0) - this.offsetY) * this.scale;
+      const sw = Math.max(1, (fp?.size ?? this.edit.radius * 2) * this.scale);
+      ctx.strokeStyle = 'rgba(255,140,220,0.95)';
+      ctx.strokeRect(sx, sy, sw, sw);
+      ctx.beginPath();
+      ctx.moveTo(sx + sw / 2 - 4, sy + sw / 2);
+      ctx.lineTo(sx + sw / 2 + 4, sy + sw / 2);
+      ctx.moveTo(sx + sw / 2, sy + sw / 2 - 4);
+      ctx.lineTo(sx + sw / 2, sy + sw / 2 + 4);
+      ctx.stroke();
+      ctx.restore();
+      return;
+    }
+
     const cx = (x + 0.5 - this.offsetX) * this.scale;
     const cy = (y + 0.5 - this.offsetY) * this.scale;
     const r = Math.max(1, this.edit.radius * this.scale);
 
-    ctx.save();
-    ctx.lineWidth = 1;
     ctx.strokeStyle =
       this.edit.tool === 'depression'
         ? 'rgba(90,170,255,0.95)'
@@ -343,6 +365,14 @@ export class Viewer {
       this.drag = 'pan';
       this.lastX = e.offsetX;
       this.lastY = e.offsetY;
+      return;
+    }
+    if (e.button === 0 && this.edit.tool === 'shape') {
+      const { x, y } = this.screenToMap(e.offsetX, e.offsetY);
+      const map = this.map;
+      if (map && x >= 0 && y >= 0 && x < map.sizeX && y < map.sizeY) {
+        this.cb.onShapePlace?.(x, y);
+      }
       return;
     }
     if (e.button === 0 && this.edit.tool !== 'off') {

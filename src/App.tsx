@@ -1,8 +1,9 @@
-import { useEffect, useRef, useState, type ReactNode } from 'react';
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { loadPalette, loadVmc, loadVmp, loadVpr, parseWorldConfig, type WorldConfig } from './loader';
 import { renderPrepare } from './luts';
 import { applyPaletteCycle, applyWaveCycle, buildPalette, type Palette } from './palette';
 import { saveVmc, saveVmp } from './save';
+import { loadC3D, projectShape, stampShape, type C3DModel, type ShapeOptions } from './shape';
 import { VrtMap } from './vmap';
 import { Viewer, type DebugMode, type EditTool, type RenderMode } from './viewer/viewer';
 
@@ -147,9 +148,65 @@ export default function App() {
   const [editSmooth, setEditSmooth] = useState(5);
   const [saveFormat, setSaveFormat] = useState<'vmc' | 'vmp'>('vmp');
 
+  const [shapeModel, setShapeModel] = useState<C3DModel | null>(null);
+  const [shapeMode, setShapeMode] = useState(0);
+  const [shapeLevel, setShapeLevel] = useState(128);
+  const [shapeSide, setShapeSide] = useState<'up' | 'down'>('up');
+  const [shapeInverse, setShapeInverse] = useState(false);
+  const [shapeNoiseLevel, setShapeNoiseLevel] = useState(0);
+  const [shapeNoiseAmp, setShapeNoiseAmp] = useState(8);
+  const [shapeYaw, setShapeYaw] = useState(0);
+  const [shapePitch, setShapePitch] = useState(0);
+  const [shapeRoll, setShapeRoll] = useState(0);
+  const [shapeScale, setShapeScale] = useState(1);
+  const [shapeScaleZ, setShapeScaleZ] = useState(1);
+  const placeShapeRef = useRef<(x: number, y: number) => void>(() => {});
+
+  const shapeOpts = useMemo<ShapeOptions | null>(() => {
+    if (!shapeModel) return null;
+    const d = Math.PI / 180;
+    return {
+      yaw: shapeYaw * d,
+      pitch: shapePitch * d,
+      roll: shapeRoll * d,
+      scaleX: shapeScale,
+      scaleY: shapeScale,
+      scaleZ: shapeScaleZ,
+      level: shapeLevel,
+      mode: shapeMode,
+      inverse: shapeInverse,
+      side: shapeSide === 'down',
+      noiseLevel: shapeNoiseLevel,
+      noiseAmp: shapeNoiseAmp,
+    };
+  }, [
+    shapeModel,
+    shapeYaw,
+    shapePitch,
+    shapeRoll,
+    shapeScale,
+    shapeScaleZ,
+    shapeLevel,
+    shapeMode,
+    shapeInverse,
+    shapeSide,
+    shapeNoiseLevel,
+    shapeNoiseAmp,
+  ]);
+
+  const shapeInfo = useMemo(() => {
+    if (!shapeModel || !shapeOpts) return null;
+    const p = projectShape(shapeModel, shapeOpts, 0, 0);
+    return { x: p.shapeX, y: p.shapeY, size: p.size };
+  }, [shapeModel, shapeOpts]);
+
   useEffect(() => {
     if (!canvasRef.current) return;
-    const viewer = new Viewer(canvasRef.current, { onInfo: setInfo, onCursor: setCursor });
+    const viewer = new Viewer(canvasRef.current, {
+      onInfo: setInfo,
+      onCursor: setCursor,
+      onShapePlace: (x, y) => placeShapeRef.current(x, y),
+    });
     viewerRef.current = viewer;
     return () => {
       viewer.dispose();
@@ -173,8 +230,18 @@ export default function App() {
       smooth: editSmooth,
       smode: 0,
       equDelta: 5,
+      shapeFootprint: shapeInfo,
     });
-  }, [editTool, editRadius, editStrength, editSmooth]);
+  }, [editTool, editRadius, editStrength, editSmooth, shapeInfo]);
+
+  /** Stamps the loaded 3D model at a clicked voxel. */
+  function placeShape(x: number, y: number) {
+    if (!map || !shapeModel || !shapeOpts) return;
+    const region = stampShape(map, shapeModel, shapeOpts, x, y);
+    viewerRef.current?.refreshRegion(region.lowX, region.lowY, region.hiX, region.hiY);
+    setStatus(`3D-модель вставлена в (${x},${y}), ${shapeInfo?.size ?? 0}x${shapeInfo?.size ?? 0}.`);
+  }
+  placeShapeRef.current = placeShape;
 
   async function buildAndShow(
     cfg: WorldConfig,
@@ -457,6 +524,7 @@ export default function App() {
               <option value="mountain">гора (+)</option>
               <option value="depression">впадина (−)</option>
               <option value="smooth">сгладить</option>
+              <option value="shape">3D-модель</option>
             </select>
           </label>
           <label>
@@ -526,6 +594,168 @@ export default function App() {
             «сохранить файл» выгружает текущий (отредактированный) рельеф: <code>.vmc</code>
             — сжатый, как в игре, или <code>.vmp</code> — несжатый. Имя берётся из{' '}
             <code>world.ini</code> (<code>File Name</code>).
+          </Hint>
+        </div>
+
+        <div className="row">
+          <span className="row-label">3D-модель</span>
+          <label>
+            файл (.c3d)
+            <input
+              type="file"
+              accept=".c3d"
+              onChange={(e) => {
+                const f = e.target.files?.[0];
+                e.target.value = '';
+                if (!f) return;
+                void (async () => {
+                  try {
+                    const model = loadC3D(await readFile(f));
+                    setShapeModel(model);
+                    setEditTool('shape');
+                    setStatus(
+                      `C3D: ${model.numPoly} полигонов, ${model.numVert} вершин.`,
+                    );
+                  } catch (err) {
+                    console.error(err);
+                    setStatus('Ошибка C3D: ' + (err as Error).message);
+                  }
+                })();
+              }}
+            />
+          </label>
+          <span className="phase-val" title="Размер отпечатка модели в вокселях">
+            {shapeModel ? `${shapeInfo?.size ?? '—'}×${shapeInfo?.size ?? '—'}` : 'не загружена'}
+          </span>
+          <label>
+            режим
+            <select value={shapeMode} onChange={(e) => setShapeMode(Number(e.target.value))}>
+              <option value={0}>map</option>
+              <option value={1}>max</option>
+              <option value={2}>min</option>
+              <option value={3}>mean</option>
+              <option value={4}>add</option>
+            </select>
+          </label>
+          <label>
+            уровень
+            <input
+              type="range"
+              min={0}
+              max={255}
+              value={shapeLevel}
+              onChange={(e) => setShapeLevel(Number(e.target.value))}
+            />
+            <span className="phase-val">{shapeLevel}</span>
+          </label>
+          <label>
+            сторона
+            <select
+              value={shapeSide}
+              onChange={(e) => setShapeSide(e.target.value as 'up' | 'down')}
+            >
+              <option value="up">верх</option>
+              <option value="down">низ</option>
+            </select>
+          </label>
+          <label>
+            инверсия
+            <input
+              type="checkbox"
+              checked={shapeInverse}
+              onChange={(e) => setShapeInverse(e.target.checked)}
+            />
+          </label>
+          <label>
+            шум %
+            <input
+              type="range"
+              min={0}
+              max={100}
+              value={shapeNoiseLevel}
+              onChange={(e) => setShapeNoiseLevel(Number(e.target.value))}
+            />
+            <span className="phase-val">{shapeNoiseLevel}</span>
+          </label>
+          <label>
+            амп
+            <input
+              type="range"
+              min={0}
+              max={64}
+              value={shapeNoiseAmp}
+              onChange={(e) => setShapeNoiseAmp(Number(e.target.value))}
+            />
+            <span className="phase-val">{shapeNoiseAmp}</span>
+          </label>
+          <label>
+            поворот Z
+            <input
+              type="range"
+              min={-180}
+              max={180}
+              value={shapeYaw}
+              onChange={(e) => setShapeYaw(Number(e.target.value))}
+            />
+            <span className="phase-val">{shapeYaw}°</span>
+          </label>
+          <label>
+            наклон X
+            <input
+              type="range"
+              min={-180}
+              max={180}
+              value={shapePitch}
+              onChange={(e) => setShapePitch(Number(e.target.value))}
+            />
+            <span className="phase-val">{shapePitch}°</span>
+          </label>
+          <label>
+            крен Y
+            <input
+              type="range"
+              min={-180}
+              max={180}
+              value={shapeRoll}
+              onChange={(e) => setShapeRoll(Number(e.target.value))}
+            />
+            <span className="phase-val">{shapeRoll}°</span>
+          </label>
+          <label>
+            масштаб XY
+            <input
+              type="range"
+              min={0.05}
+              max={4}
+              step={0.05}
+              value={shapeScale}
+              onChange={(e) => setShapeScale(Number(e.target.value))}
+            />
+            <span className="phase-val">{shapeScale.toFixed(2)}</span>
+          </label>
+          <label>
+            масштаб Z
+            <input
+              type="range"
+              min={0.05}
+              max={4}
+              step={0.05}
+              value={shapeScaleZ}
+              onChange={(e) => setShapeScaleZ(Number(e.target.value))}
+            />
+            <span className="phase-val">{shapeScaleZ.toFixed(2)}</span>
+          </label>
+          <Hint>
+            Загрузите <code>.c3d</code> (в игре — папка <code>shape3d\</code>, например{' '}
+            <code>u1.c3d</code>). Модель проецируется сверху в отпечаток, который штампуется
+            в рельеф инструментом <b>«3D-модель»</b> (выбирается автоматически при загрузке).
+            <br />
+            Наведите на карту — пунктирный квадрат показывает отпечаток; <b>ЛКМ</b> —
+            вставить. <b>режим</b>: map (заменить), max/min (только выше/ниже), mean
+            (среднее), add (прибавить); <b>уровень</b> — сдвиг высоты; <b>сторона</b> — верх
+            или низ модели; <b>инверсия</b> — вывернуть.
+            <br />
+            Поворот по Z/X/Y, масштаб XY/Z и шум применяются до вставки.
           </Hint>
         </div>
       </header>

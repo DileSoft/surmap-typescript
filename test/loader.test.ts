@@ -17,6 +17,7 @@ import { loadPalette, loadVmc, loadVpr, parseWorldConfig } from '../src/loader';
 import { VmcDecoder } from '../src/huffman';
 import { renderPrepare } from '../src/luts';
 import { saveVmc, saveVmp } from '../src/save';
+import { loadC3D, projectShape, stampShape, type ShapeOptions } from '../src/shape';
 import { VrtMap } from '../src/vmap';
 import { applyPaletteCycle, applyWaveCycle, buildPalette } from '../src/palette';
 
@@ -321,5 +322,168 @@ describe('saving world files', () => {
     }
     expect(height.every((v) => v === 0)).toBe(true);
     expect(meta.every((v) => v === 0)).toBe(true);
+  });
+});
+
+describe('3D shape insertion', () => {
+  const begin = [1, 32, 64, 72, 88, 104, 112, 120];
+  const end = [31, 63, 71, 87, 103, 111, 119, 127];
+  const opts: ShapeOptions = {
+    yaw: 0,
+    pitch: 0,
+    roll: 0,
+    scaleX: 1,
+    scaleY: 1,
+    scaleZ: 1,
+    level: 0,
+    mode: 0,
+    inverse: false,
+    side: false,
+    noiseLevel: 0,
+    noiseAmp: 0,
+  };
+
+  /** A minimal C3D (version 8): one triangle with a sloped Z. */
+  function synthC3D(): Uint8Array {
+    const buf = new ArrayBuffer(512);
+    const v = new DataView(buf);
+    let o = 0;
+    const i32 = (x: number) => {
+      v.setInt32(o, x, true);
+      o += 4;
+    };
+    const u32 = (x: number) => {
+      v.setUint32(o, x, true);
+      o += 4;
+    };
+    const i8 = (x: number) => {
+      v.setInt8(o, x);
+      o += 1;
+    };
+    const u8 = (x: number) => {
+      v.setUint8(o, x);
+      o += 1;
+    };
+    const f64 = (x: number) => {
+      v.setFloat64(o, x, true);
+      o += 8;
+    };
+    i32(8);
+    i32(3);
+    i32(1);
+    i32(1);
+    i32(3);
+    i32(10);
+    i32(10);
+    i32(40); // max
+    i32(-10);
+    i32(-10);
+    i32(0); // min
+    i32(0);
+    i32(0);
+    i32(0); // off
+    i32(10); // rmax
+    i32(0);
+    i32(0);
+    i32(0); // phi/psi/tetta
+    f64(0);
+    f64(0);
+    f64(0);
+    f64(0); // volume, rcm
+    for (let i = 0; i < 9; i++) f64(i % 4 === 0 ? 1 : 0);
+    const verts = [
+      [0, 0, 0],
+      [20, 0, 0],
+      [0, 20, 40],
+    ];
+    for (const [x, y, z] of verts) {
+      i32(x);
+      i32(y);
+      i32(z);
+      i8(x);
+      i8(y);
+      i8(z);
+      i32(0);
+    }
+    i8(0);
+    i8(0);
+    i8(127);
+    u8(0);
+    i32(0); // one normal
+    i32(3);
+    i32(0);
+    u32(1);
+    u32(0);
+    i8(0);
+    i8(0);
+    i8(127);
+    u8(0);
+    i8(0);
+    i8(0);
+    i8(0);
+    for (const vi of [0, 1, 2]) {
+      i32(vi);
+      i32(0);
+    }
+    return new Uint8Array(buf, 0, o);
+  }
+
+  function flatMap() {
+    const sizeX = 2048;
+    const sizeY = 64;
+    const height = new Uint8Array(sizeX * sizeY).fill(50);
+    const meta = new Uint8Array(sizeX * sizeY);
+    for (let i = 0; i < meta.length; i++) meta[i] = 1 << 3;
+    return { sizeX, sizeY, height, meta };
+  }
+
+  test('loads a synthetic C3D and projects a non-empty footprint', () => {
+    const model = loadC3D(synthC3D());
+    expect(model.numVert).toBe(3);
+    expect(model.numPoly).toBe(1);
+    expect(Array.from(model.polys[0])).toEqual([0, 1, 2]);
+
+    const proj = projectShape(model, opts, 0, 0);
+    expect(proj.size).toBeGreaterThan(0);
+    expect(proj.dim).toBeGreaterThanOrEqual(proj.size);
+    const touched = proj.upper.reduce((n, v) => n + (v ? 1 : 0), 0);
+    expect(touched).toBeGreaterThan(0);
+    // Z grows with the model's Z (flipped once by diag(1,-1,-1) then re-flipped)
+    expect(Math.max(...proj.upper) - Math.min(...proj.upper.filter((v) => v))).toBeGreaterThan(0);
+  });
+
+  test('stampShape writes the projection into the terrain', () => {
+    const level = flatMap();
+    const map = new VrtMap(level, renderPrepare(begin, end, 0));
+    const model = loadC3D(synthC3D());
+
+    const region = stampShape(map, model, opts, 300, 20);
+    expect(region.hiX - region.lowX + 1).toBe(projectShape(model, opts, 300, 20).size);
+
+    let changed = 0;
+    for (let y = 0; y < level.sizeY; y++) {
+      for (let x = 0; x < level.sizeX; x++) {
+        if (map.height[y * level.sizeX + x] !== 50) changed++;
+      }
+    }
+    expect(changed).toBeGreaterThan(0);
+
+    // mode 0 replaces heights with the projected Z (1..255)
+    let maxH = 0;
+    for (let i = 0; i < map.height.length; i++) if (map.height[i] > maxH) maxH = map.height[i];
+    expect(maxH).toBeLessThanOrEqual(255);
+  });
+
+  const realC3D = path.resolve(
+    __dirname,
+    '../../Vangers/vangers/bin/shape3d/u1.c3d',
+  );
+  test.skipIf(!fs.existsSync(realC3D))('parses the real u1.c3d model', () => {
+    const model = loadC3D(new Uint8Array(fs.readFileSync(realC3D)));
+    expect(model.numVert).toBe(363);
+    expect(model.numPoly).toBe(646);
+    const proj = projectShape(model, opts, 0, 0);
+    const touched = proj.upper.reduce((n, v) => n + (v ? 1 : 0), 0);
+    expect(touched).toBeGreaterThan(0);
   });
 });
