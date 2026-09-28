@@ -10,13 +10,38 @@ body {
 }
 
 header {
-  padding: 8px 12px;
+  padding: 6px 12px;
   background: #171b24;
   border-bottom: 1px solid #2a3040;
+}
+
+.row {
   display: flex;
   flex-wrap: wrap;
   gap: 10px;
   align-items: center;
+  padding: 5px 0;
+}
+
+.row + .row {
+  border-top: 1px solid #232a38;
+}
+
+.row-label {
+  color: #7f8aa3;
+  min-width: 118px;
+}
+
+.hint-inline {
+  color: #6d768a;
+}
+
+.hint-inline code,
+code {
+  background: #202634;
+  border: 1px solid #2a3040;
+  border-radius: 3px;
+  padding: 0 4px;
 }
 
 label {

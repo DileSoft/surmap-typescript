@@ -25,6 +25,22 @@ interface PaletteFile {
   bytes: Uint8Array;
 }
 
+async function readPalettes(files: File[]): Promise<PaletteFile[]> {
+  const out: PaletteFile[] = [];
+  for (const f of files) {
+    if (f.name.toLowerCase().endsWith('.pal')) out.push({ name: f.name, bytes: await readFile(f) });
+  }
+  return out;
+}
+
+/** Merges palette lists by file name (new entries win), preserving order. */
+function mergePalettes(base: PaletteFile[], added: PaletteFile[]): PaletteFile[] {
+  const map = new Map<string, PaletteFile>();
+  for (const p of base) map.set(p.name.toLowerCase(), p);
+  for (const p of added) map.set(p.name.toLowerCase(), p);
+  return [...map.values()];
+}
+
 /** Shimmer = the per-frame palette animation (pal_iter0/1/2), applied statically. */
 type ShimmerKind = 'none' | 'wave' | 'dyn' | 'all';
 interface ShimmerMode {
@@ -169,26 +185,34 @@ export default function App() {
       await sleep(0);
 
       const cfg = parseWorldConfig(new TextDecoder().decode(await readFile(ini)));
-      // Every selected .pal is a cycle; the world's own palette is the default.
-      const palFiles = files.filter((f) => f.name.toLowerCase().endsWith('.pal'));
-      const paletteFiles: PaletteFile[] = [];
-      for (const f of palFiles) paletteFiles.push({ name: f.name, bytes: await readFile(f) });
-      let baseIndex = paletteFiles.findIndex(
+      const merged = mergePalettes(palettes, await readPalettes(files));
+      let baseIndex = merged.findIndex(
         (p) => p.name.toLowerCase() === cfg.paletteFile.toLowerCase(),
       );
       if (baseIndex < 0) baseIndex = 0;
 
-      await buildAndShow(
-        cfg,
-        await readFile(data),
-        vpr ? await readFile(vpr) : null,
-        paletteFiles,
-        baseIndex,
-      );
+      await buildAndShow(cfg, await readFile(data), vpr ? await readFile(vpr) : null, merged, baseIndex);
     } catch (e) {
       console.error(e);
       setStatus('Ошибка: ' + (e as Error).message);
     }
+  }
+
+  /** Loads/replaces cycle palettes without re-selecting the whole world. */
+  async function addPalettes(files: File[]) {
+    const added = await readPalettes(files);
+    if (!added.length) return;
+    const merged = mergePalettes(palettes, added);
+    setPalettes(merged);
+
+    if (!config) {
+      setStatus('Палитры загружены. Теперь выберите файлы мира.');
+      return;
+    }
+    const index = Math.min(paletteSel, merged.length - 1);
+    setPaletteSel(index);
+    setBasePalette(buildPalette(merged[index].bytes, config.beginColors, config.endColors));
+    setStatus(`Палитр: ${merged.length}.`);
   }
 
   async function loadSeparately() {
@@ -203,124 +227,147 @@ export default function App() {
   return (
     <>
       <header>
-        <label className="primary">
-          Файлы мира
-          <input
-            type="file"
-            multiple
-            accept=".ini,.txt,.vmp,.vmc,.vpr,.pal"
-            onChange={(e) => {
-              const files = [...(e.target.files ?? [])];
-              e.target.value = '';
-              if (files.length) void loadFromFiles(files);
-            }}
-          />
-        </label>
+        <div className="row">
+          <span className="row-label">загрузка</span>
+          <label className="primary">
+            Файлы мира
+            <input
+              type="file"
+              multiple
+              accept=".ini,.txt,.vmp,.vmc,.vpr,.pal"
+              onChange={(e) => {
+                const files = [...(e.target.files ?? [])];
+                e.target.value = '';
+                if (files.length) void loadFromFiles(files);
+              }}
+            />
+          </label>
+          <details className="separately">
+            <summary>Загрузить по отдельности</summary>
+            <div className="sep-body">
+              <label>
+                world.ini <input ref={iniRef} type="file" accept=".ini,.txt" />
+              </label>
+              <label>
+                data <input ref={dataRef} type="file" accept=".vmp,.vmc" />
+              </label>
+              <label>
+                .vpr <input ref={vprRef} type="file" accept=".vpr" />
+              </label>
+              <label>
+                .pal <input ref={palRef} type="file" accept=".pal" multiple />
+              </label>
+              <button onClick={() => void loadSeparately()}>Загрузить</button>
+            </div>
+          </details>
+        </div>
 
-        <details className="separately">
-          <summary>Загрузить по отдельности</summary>
-          <div className="sep-body">
-            <label>
-              world.ini <input ref={iniRef} type="file" accept=".ini,.txt" />
-            </label>
-            <label>
-              data <input ref={dataRef} type="file" accept=".vmp,.vmc" />
-            </label>
-            <label>
-              .vpr <input ref={vprRef} type="file" accept=".vpr" />
-            </label>
-            <label>
-              .pal <input ref={palRef} type="file" accept=".pal" multiple />
-            </label>
-            <button onClick={() => void loadSeparately()}>Загрузить</button>
-          </div>
-        </details>
+        <div className="row">
+          <span className="row-label">рендер</span>
+          <label>
+            режим
+            <select
+              value={renderMode}
+              onChange={(e) => {
+                const mode = e.target.value as RenderMode;
+                setRenderMode(mode);
+                viewerRef.current?.setRenderMode(mode);
+              }}
+            >
+              <option value="reg">regRender (тени)</option>
+              <option value="line">LINE_render</option>
+            </select>
+          </label>
+          <label>
+            вид
+            <select
+              value={debug}
+              onChange={(e) => {
+                const mode = e.target.value as DebugMode;
+                setDebug(mode);
+                viewerRef.current?.setDebug(mode);
+              }}
+            >
+              <option value="color">цвет</option>
+              <option value="heights">высоты</option>
+              <option value="double">double level</option>
+              <option value="terrain">террейн</option>
+              <option value="shadow">SHADOW</option>
+              <option value="objshadow">OBJSHADOW</option>
+              <option value="doublebits">DOUBLE бит</option>
+            </select>
+          </label>
+          <button disabled={!map} onClick={() => viewerRef.current?.fit()}>
+            Fit
+          </button>
+          <button disabled={!map} onClick={() => viewerRef.current?.oneToOne()}>
+            1:1
+          </button>
+        </div>
 
-        <label>
-          цикл (палитра)
-          <select
-            value={paletteSel}
-            disabled={palettes.length <= 1}
-            onChange={(e) => selectPalette(Number(e.target.value))}
-          >
-            {palettes.length === 0 && <option>— один .pal —</option>}
-            {palettes.map((p, i) => (
-              <option key={i} value={i}>
-                {p.name}
-              </option>
-            ))}
-          </select>
-        </label>
+        <div className="row">
+          <span className="row-label">мерцание / цикл</span>
 
-        <label>
-          мерцание
-          <select
-            value={shimmerSel}
-            disabled={modeList.length <= 1}
-            onChange={(e) => setShimmerSel(Number(e.target.value))}
-          >
-            {modeList.map((m, i) => (
-              <option key={i} value={i}>
-                {m.label}
-              </option>
-            ))}
-          </select>
-        </label>
+          <label>
+            цикл (палитра)
+            <select
+              value={paletteSel}
+              disabled={palettes.length <= 1}
+              onChange={(e) => selectPalette(Number(e.target.value))}
+            >
+              {palettes.length === 0 && <option>— палитры не загружены —</option>}
+              {palettes.map((p, i) => (
+                <option key={i} value={i}>
+                  {p.name}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label>
+            палитры (.pal)
+            <input
+              type="file"
+              multiple
+              accept=".pal"
+              onChange={(e) => {
+                const files = [...(e.target.files ?? [])];
+                e.target.value = '';
+                if (files.length) void addPalettes(files);
+              }}
+            />
+          </label>
+          <span className="hint-inline">
+            обычно в игре: <code>&lt;bin&gt;\resource\pal\</code> — fostral.pal, fostral1.pal,
+            fostral2.pal (Glorx/Necross аналогично; по 3 у больших миров)
+          </span>
 
-        <label title="Положение мерцания (статически)">
-          фаза
-          <input
-            type="range"
-            min={0}
-            max={100}
-            value={phase}
-            disabled={modeList[shimmerSel]?.kind === 'none'}
-            onChange={(e) => setPhase(Number(e.target.value))}
-          />
-          <span className="phase-val">{phase}%</span>
-        </label>
-
-        <label>
-          рендер
-          <select
-            value={renderMode}
-            onChange={(e) => {
-              const mode = e.target.value as RenderMode;
-              setRenderMode(mode);
-              viewerRef.current?.setRenderMode(mode);
-            }}
-          >
-            <option value="reg">regRender (тени)</option>
-            <option value="line">LINE_render</option>
-          </select>
-        </label>
-
-        <label>
-          вид
-          <select
-            value={debug}
-            onChange={(e) => {
-              const mode = e.target.value as DebugMode;
-              setDebug(mode);
-              viewerRef.current?.setDebug(mode);
-            }}
-          >
-            <option value="color">цвет</option>
-            <option value="heights">высоты</option>
-            <option value="double">double level</option>
-            <option value="terrain">террейн</option>
-            <option value="shadow">SHADOW</option>
-            <option value="objshadow">OBJSHADOW</option>
-            <option value="doublebits">DOUBLE бит</option>
-          </select>
-        </label>
-
-        <button disabled={!map} onClick={() => viewerRef.current?.fit()}>
-          Fit
-        </button>
-        <button disabled={!map} onClick={() => viewerRef.current?.oneToOne()}>
-          1:1
-        </button>
+          <label>
+            мерцание
+            <select
+              value={shimmerSel}
+              disabled={modeList.length <= 1}
+              onChange={(e) => setShimmerSel(Number(e.target.value))}
+            >
+              {modeList.map((m, i) => (
+                <option key={i} value={i}>
+                  {m.label}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label title="Положение мерцания (статически)">
+            фаза
+            <input
+              type="range"
+              min={0}
+              max={100}
+              value={phase}
+              disabled={modeList[shimmerSel]?.kind === 'none'}
+              onChange={(e) => setPhase(Number(e.target.value))}
+            />
+            <span className="phase-val">{phase}%</span>
+          </label>
+        </div>
       </header>
 
       <div id="status">{status}</div>
