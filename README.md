@@ -2,8 +2,9 @@
 
 Точный порт построения поверхности миров Vangers (VMP/VMC → **vmap** → `lineTcolor`)
 на TypeScript, интерфейс — **Vite + React**, вывод — canvas. Реализация повторяет
-оригинальный C++ из репозитория [Vangers](https://github.com/caiiiycuk/Vangers)
-один-в-один, включая целочисленную фиксированную арифметику.
+оригинальный C++ из репозитория [KranX/Vangers](https://github.com/KranX/Vangers)
+один-в-один, включая целочисленную фиксированную арифметику. (Ссылка ведёт на
+оригинальный апстрим `KranX/Vangers`, а не на форк `caiiiycuk/Vangers`.)
 
 ## Что портировано
 
