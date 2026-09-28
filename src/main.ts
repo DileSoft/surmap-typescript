@@ -192,6 +192,18 @@ class Viewer {
     this.draw();
   }
 
+  /** 1:1 — one voxel per screen pixel, centred on the current view. */
+  oneToOne() {
+    if (!this.map) return;
+    const cx = this.offsetX + canvas.width / (2 * this.scale);
+    const cy = this.offsetY + canvas.height / (2 * this.scale);
+    this.scale = 1;
+    this.offsetX = cx - canvas.width / 2;
+    this.offsetY = cy - canvas.height / 2;
+    this.clamp();
+    this.draw();
+  }
+
   private clamp() {
     if (!this.map) return;
     const maxX = Math.max(0, this.map.sizeX - canvas.width / this.scale);
@@ -292,6 +304,7 @@ $('debug').addEventListener('change', (e) =>
   viewer.setDebug((e.target as HTMLSelectElement).value as DebugMode),
 );
 $('fit').addEventListener('click', () => viewer.fit());
+$('oneToOne').addEventListener('click', () => viewer.oneToOne());
 
 let dragging = false;
 let lastX = 0;
