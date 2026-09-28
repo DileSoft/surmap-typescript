@@ -646,10 +646,10 @@ export default function App() {
         <div className="row">
           <span className="row-label">3D-модель</span>
           <label>
-            файл (.c3d)
+            файл (.c3d/.m3d)
             <input
               type="file"
-              accept=".c3d"
+              accept=".c3d,.m3d"
               onChange={(e) => {
                 const f = e.target.files?.[0];
                 e.target.value = '';
@@ -660,11 +660,11 @@ export default function App() {
                     setShapeModel(model);
                     setEditTool('shape');
                     setStatus(
-                      `C3D: ${model.numPoly} полигонов, ${model.numVert} вершин.`,
+                      `${f.name}: ${model.numPoly} полигонов, ${model.numVert} вершин.`,
                     );
                   } catch (err) {
                     console.error(err);
-                    setStatus('Ошибка C3D: ' + (err as Error).message);
+                    setStatus('Ошибка модели: ' + (err as Error).message);
                   }
                 })();
               }}
@@ -792,9 +792,11 @@ export default function App() {
             <span className="phase-val">{shapeScaleZ.toFixed(2)}</span>
           </label>
           <Hint>
-            Загрузите <code>.c3d</code> (в игре — папка <code>shape3d\</code>, например{' '}
-            <code>u1.c3d</code>). Модель проецируется сверху в отпечаток, который штампуется
-            в рельеф инструментом <b>«3D-модель»</b> (выбирается автоматически при загрузке).
+            Загрузите <code>.c3d</code> или <code>.m3d</code> (в игре — папки{' '}
+            <code>shape3d\</code> и <code>resource\m3d\</code>; <code>.m3d</code> начинается
+            с той же модели, что и <code>.c3d</code>). Модель проецируется сверху в
+            отпечаток, который штампуется в рельеф инструментом <b>«3D-модель»</b>{' '}
+            (выбирается автоматически при загрузке).
             <br />
             Наведите на карту — пунктирный квадрат показывает отпечаток; <b>ЛКМ</b> —
             вставить. <b>режим</b>: map (заменить), max/min (только выше/ниже), mean

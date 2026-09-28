@@ -486,4 +486,26 @@ describe('3D shape insertion', () => {
     const touched = proj.upper.reduce((n, v) => n + (v ? 1 : 0), 0);
     expect(touched).toBeGreaterThan(0);
   });
+
+  test('parses .m3d by its leading C3D model (trailing data ignored)', () => {
+    const c3d = synthC3D();
+    const m3d = new Uint8Array(c3d.length + 64).fill(0xab);
+    m3d.set(c3d, 0);
+    const model = loadC3D(m3d);
+    expect(model.numVert).toBe(3);
+    expect(model.numPoly).toBe(1);
+  });
+
+  const realM3D = path.resolve(
+    __dirname,
+    '../../Vangers/vangers/bin/resource/m3d/fauna/f1.m3d',
+  );
+  test.skipIf(!fs.existsSync(realM3D))('parses the real f1.m3d model', () => {
+    const model = loadC3D(new Uint8Array(fs.readFileSync(realM3D)));
+    expect(model.numVert).toBe(23);
+    expect(model.numPoly).toBe(28);
+    const proj = projectShape(model, opts, 0, 0);
+    const touched = proj.upper.reduce((n, v) => n + (v ? 1 : 0), 0);
+    expect(touched).toBeGreaterThan(0);
+  });
 });

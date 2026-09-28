@@ -110,8 +110,9 @@ surmap). **ПКМ** — панорама, колесо — зум. Кисть п
 ### Вставка 3D-модели
 Портирован «3D Shape Tool» из `surmap`:
 
-- загрузка `.c3d` (`src/3d/3dobject.cpp` → `Model::loadC3D`; файлы лежат в папке
-  `shape3d\`, в репозитории есть `u1.c3d` / `u2.c3d`);
+- загрузка `.c3d` / `.m3d` (`src/3d/3dobject.cpp` → `Model::loadC3D`; `.m3d` начинается
+  с той же C3D-модели — `Object::loadM3D`; файлы лежат в `shape3d\` и
+  `resource\m3d\`);
 - преобразование модели (повороты по Z/X/Y и масштаб) и **проекция сверху** в два
   буфера «верх/низ» (`surmap/3d_shape.cpp` → `Model::height_project` +
   `Polygon::height_project`);
