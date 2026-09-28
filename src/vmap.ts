@@ -11,6 +11,8 @@
  * XCYCL/YCYCL.
  */
 import {
+  DELTA_MASK,
+  DELTA_SHIFT,
   DOUBLE_LEVEL,
   H_CORRECTION,
   H_SIZE,
@@ -25,6 +27,7 @@ import {
   TERRAIN_OFFSET,
   xcycl,
 } from './constants';
+import { deltaZone, type EditableMap } from './edit';
 import type { LevelData } from './loader';
 import type { Luts } from './luts';
 
@@ -47,6 +50,8 @@ export class VrtMap {
   readonly meta: Uint8Array;
   /** Snapshot of `meta` as loaded, so `regRender` edits can be undone. */
   private readonly metaOriginal: Uint8Array;
+  /** Snapshot of `height` as loaded, so terrain edits can be undone. */
+  private readonly heightOriginal: Uint8Array;
   /** Per-voxel surface palette index (`lineTcolor`). */
   readonly color: Uint8Array;
 
@@ -60,14 +65,97 @@ export class VrtMap {
     this.height = level.height;
     this.meta = level.meta;
     this.metaOriginal = level.meta.slice();
+    this.heightOriginal = level.height.slice();
     this.color = new Uint8Array(level.sizeX * level.sizeY);
     this.luts = luts;
     this.sp = new Uint8Array(SHADOW_PARENT_SIZE);
   }
 
-  /** Restores the flag bytes to their as-loaded state. */
+  /**
+   * Restores the render-written flag bits (SHADOW/OBJSHADOW) to their as-loaded
+   * state. Terrain / double-level / delta edits done by the editor are kept.
+   */
   resetMeta(): void {
+    const { meta, metaOriginal } = this;
+    for (let i = 0; i < meta.length; i++) {
+      meta[i] = (meta[i] & ~(SHADOW_MASK | OBJSHADOW)) | (metaOriginal[i] & (SHADOW_MASK | OBJSHADOW));
+    }
+  }
+
+  /** Restores the heightmap to the as-loaded state (undoes all terrain edits). */
+  resetHeights(): void {
+    this.height.set(this.heightOriginal);
+  }
+
+  /** Restores both heightmap and flags to the as-loaded state. */
+  resetAll(): void {
+    this.resetHeights();
     this.meta.set(this.metaOriginal);
+  }
+
+  // ---------------------------------------------------------------------------
+  // land.cpp : editing primitives (SURMAP build)
+  // ---------------------------------------------------------------------------
+
+  /** `GET_UP_ALT`: height shown on top at `index` (column `x`). */
+  getUpAlt(index: number, x: number): number {
+    const { height, meta } = this;
+    if (meta[index] & DOUBLE_LEVEL) {
+      const row = index - x;
+      return x & 1 ? height[index] : height[row + xcycl(x + 1)];
+    }
+    return height[index];
+  }
+
+  /** `GET_DOWN_ALT`: height shown underneath at `index` (column `x`). */
+  getDownAlt(index: number, x: number): number {
+    const { height, meta } = this;
+    if (meta[index] & DOUBLE_LEVEL && x & 1) {
+      return height[index - x + xcycl(x - 1)];
+    }
+    return height[index];
+  }
+
+  /**
+   * Port of `pixSet` (src/terra/land.cpp) for the game/SURMAP height path:
+   * adds `delta` to the voxel height, handling double-level columns and
+   * clamping to 0..255 (`LandBounded`). Terrain is left untouched (`surf = 0`).
+   */
+  pixSet(x: number, y: number, delta: number): void {
+    if (!delta) return;
+    const { height, meta } = this;
+    const base = y * H_SIZE + x;
+    let h = this.getUpAlt(base, x);
+
+    if (meta[base] & DOUBLE_LEVEL) {
+      if (x & 1) {
+        h += delta;
+        const width =
+          ((((meta[base - 1] & DELTA_MASK) << 2) + (meta[base] & DELTA_MASK) + 1) << DELTA_SHIFT);
+        if (height[base - 1] + width >= h) {
+          meta[base] &= ~DOUBLE_LEVEL;
+          meta[base - 1] &= ~DOUBLE_LEVEL;
+          meta[base] = (meta[base] & ~TERRAIN_MASK) | (meta[base - 1] & TERRAIN_MASK);
+          const xx = xcycl(x + 1);
+          h = (height[base - 1] + this.getDownAlt(base + (xx - x), xx)) >> 1;
+          meta[base] &= ~DELTA_MASK;
+          meta[base - 1] &= ~DELTA_MASK;
+        }
+      } else {
+        return;
+      }
+    } else {
+      h += delta;
+    }
+
+    if (h < 0) h = 0;
+    else if (h > 255) h = 255;
+    height[base] = h;
+  }
+
+  /** Port of `deltaZone` (the SURMAP Toolzer): a round hill/pit. */
+  deltaZone(x: number, y: number, rad: number, smth: number, dh: number, smode = 0, eql = 0): void {
+    deltaZone(this as EditableMap, x, y, rad, smth, dh, smode, eql);
   }
 
   // ---------------------------------------------------------------------------

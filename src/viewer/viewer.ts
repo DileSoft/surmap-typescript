@@ -17,10 +17,29 @@ export type DebugMode =
   | 'objshadow'
   | 'doublebits';
 
+/** Terrain editor tool, mirroring the SURMAP Toolzer modes. */
+export type EditTool = 'off' | 'mountain' | 'depression' | 'smooth';
+
+export interface EditOptions {
+  tool: EditTool;
+  /** Brush radius in voxels (1..MAX_RADIUS). */
+  radius: number;
+  /** Height delta per click (mountain/depression). */
+  strength: number;
+  /** Smooth zone 0..10. */
+  smooth: number;
+  /** Rim distribution 0..2 (even / random / rotating). */
+  smode: number;
+  /** Smoothing threshold for the `smooth` tool. */
+  equDelta: number;
+}
+
 export interface ViewerCallbacks {
   onInfo?: (text: string) => void;
   onCursor?: (text: string) => void;
 }
+
+type DragMode = 'none' | 'pan' | 'paint';
 
 export class Viewer {
   private map: VrtMap | null = null;
@@ -29,14 +48,26 @@ export class Viewer {
   private debug: DebugMode = 'color';
   private tag = 0;
   private renderedRows = new Int16Array(0);
+  private lastImage: ImageData | null = null;
 
   scale = 1;
   offsetX = 0;
   offsetY = 0;
 
-  private dragging = false;
+  private drag: DragMode = 'none';
   private lastX = 0;
   private lastY = 0;
+
+  private edit: EditOptions = {
+    tool: 'off',
+    radius: 32,
+    strength: 8,
+    smooth: 5,
+    smode: 0,
+    equDelta: 5,
+  };
+  private hoverX = -1;
+  private hoverY = -1;
 
   constructor(
     private readonly canvas: HTMLCanvasElement,
@@ -47,6 +78,7 @@ export class Viewer {
     canvas.addEventListener('mousemove', this.onMouseMove);
     canvas.addEventListener('mouseleave', this.onMouseLeave);
     canvas.addEventListener('wheel', this.onWheel, { passive: false });
+    canvas.addEventListener('contextmenu', this.onContextMenu);
   }
 
   dispose(): void {
@@ -55,6 +87,7 @@ export class Viewer {
     this.canvas.removeEventListener('mousemove', this.onMouseMove);
     this.canvas.removeEventListener('mouseleave', this.onMouseLeave);
     this.canvas.removeEventListener('wheel', this.onWheel);
+    this.canvas.removeEventListener('contextmenu', this.onContextMenu);
   }
 
   setData(map: VrtMap, palette: Palette): void {
@@ -83,6 +116,25 @@ export class Viewer {
   /** Swaps the palette (e.g. after applying a Dynamic Palette cycle) and redraws. */
   setPalette(palette: Palette): void {
     this.palette = palette;
+    this.draw();
+  }
+
+  setEdit(edit: EditOptions): void {
+    this.edit = { ...edit };
+    this.canvas.style.cursor = this.edit.tool === 'off' ? 'grab' : 'crosshair';
+    if (this.edit.tool === 'off' && this.hoverX >= 0) {
+      this.hoverX = -1;
+      this.hoverY = -1;
+      this.draw();
+    } else if (this.hoverX >= 0) {
+      this.drawBrush(this.hoverX, this.hoverY);
+    }
+  }
+
+  /** Undoes all terrain edits (heights + flags) and redraws. */
+  resetEdits(): void {
+    this.map?.resetAll();
+    this.tag++;
     this.draw();
   }
 
@@ -129,6 +181,42 @@ export class Viewer {
     this.draw();
   }
 
+  /**
+   * Re-renders an inclusive voxel region with the current render mode and
+   * redraws. Used after an edit so only the affected rows are recomputed.
+   */
+  refreshRegion(lowX: number, lowY: number, hiX: number, hiY: number): void {
+    const map = this.map;
+    if (!map) return;
+    const ymask = map.sizeY - 1;
+    for (let y = lowY; y <= hiY; y++) {
+      const yy = y & ymask;
+      if (this.renderMode === 'reg') map.regRender(lowX, yy, hiX + 1, yy + 1);
+      else map.lineRender(yy);
+      this.renderedRows[yy] = this.tag + 1;
+    }
+    this.draw();
+  }
+
+  /** Applies the active edit tool at a screen position. */
+  applyEditAt(px: number, py: number): void {
+    const map = this.map;
+    if (!map || this.edit.tool === 'off') return;
+    const { x, y } = this.screenToMap(px, py);
+    if (x < 0 || y < 0 || x >= map.sizeX || y >= map.sizeY) return;
+
+    const rad = this.edit.radius;
+    const dh =
+      this.edit.tool === 'mountain'
+        ? this.edit.strength
+        : this.edit.tool === 'depression'
+          ? -this.edit.strength
+          : 0;
+    const eql = this.edit.tool === 'smooth' ? this.edit.equDelta : 0;
+    map.deltaZone(x, y, rad, this.edit.smooth, dh, this.edit.smode, eql);
+    this.refreshRegion(x - rad, y - rad, x + rad, y + rad);
+  }
+
   draw(): void {
     const map = this.map;
     const palette = this.palette;
@@ -158,8 +246,10 @@ export class Viewer {
         data[di + 3] = 255;
       }
     }
+    this.lastImage = img;
     ctx.putImageData(img, 0, 0);
     this.cb.onInfo?.(this.infoText());
+    if (this.edit.tool !== 'off' && this.hoverX >= 0) this.drawBrush(this.hoverX, this.hoverY);
   }
 
   infoText(): string {
@@ -209,33 +299,90 @@ export class Viewer {
     this.offsetY = Math.max(0, Math.min(maxY, this.offsetY));
   }
 
+  /** Draws the brush outline for the current tool at a screen position. */
+  private drawBrush(px: number, py: number): void {
+    const map = this.map;
+    if (!map || this.edit.tool === 'off' || !this.lastImage) return;
+    const ctx = this.canvas.getContext('2d');
+    if (!ctx) return;
+    ctx.putImageData(this.lastImage, 0, 0);
+
+    const { x, y } = this.screenToMap(px, py);
+    const cx = (x + 0.5 - this.offsetX) * this.scale;
+    const cy = (y + 0.5 - this.offsetY) * this.scale;
+    const r = Math.max(1, this.edit.radius * this.scale);
+
+    ctx.save();
+    ctx.lineWidth = 1;
+    ctx.strokeStyle =
+      this.edit.tool === 'depression'
+        ? 'rgba(90,170,255,0.95)'
+        : this.edit.tool === 'smooth'
+          ? 'rgba(140,240,140,0.95)'
+          : 'rgba(255,220,80,0.95)';
+    ctx.beginPath();
+    ctx.arc(cx, cy, r, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.moveTo(cx - 4, cy);
+    ctx.lineTo(cx + 4, cy);
+    ctx.moveTo(cx, cy - 4);
+    ctx.lineTo(cx, cy + 4);
+    ctx.stroke();
+    ctx.restore();
+  }
+
   private onMouseDown = (e: MouseEvent) => {
-    this.dragging = true;
-    this.lastX = e.offsetX;
-    this.lastY = e.offsetY;
+    if (e.button === 2 || (e.button === 0 && this.edit.tool === 'off')) {
+      this.drag = 'pan';
+      this.lastX = e.offsetX;
+      this.lastY = e.offsetY;
+      return;
+    }
+    if (e.button === 0 && this.edit.tool !== 'off') {
+      this.drag = 'paint';
+      this.applyEditAt(e.offsetX, e.offsetY);
+    }
   };
 
   private onMouseUp = () => {
-    this.dragging = false;
+    this.drag = 'none';
   };
 
   private onMouseLeave = () => {
-    this.dragging = false;
+    this.drag = 'none';
+    if (this.hoverX >= 0) {
+      this.hoverX = -1;
+      this.hoverY = -1;
+      if (this.edit.tool !== 'off') this.draw();
+    }
   };
 
   private onMouseMove = (e: MouseEvent) => {
-    if (this.dragging) {
+    this.hoverX = e.offsetX;
+    this.hoverY = e.offsetY;
+
+    if (this.drag === 'paint') {
+      this.applyEditAt(e.offsetX, e.offsetY);
+      return;
+    }
+    if (this.drag === 'pan') {
       this.pan(e.offsetX - this.lastX, e.offsetY - this.lastY);
       this.lastX = e.offsetX;
       this.lastY = e.offsetY;
       return;
     }
+    if (this.edit.tool !== 'off') this.drawBrush(e.offsetX, e.offsetY);
     this.cb.onCursor?.(this.describeCursor(e.offsetX, e.offsetY));
   };
 
   private onWheel = (e: WheelEvent) => {
     e.preventDefault();
     this.zoomAt(e.offsetX, e.offsetY, e.deltaY < 0 ? 1.25 : 1 / 1.25);
+  };
+
+  private onContextMenu = (e: MouseEvent) => {
+    e.preventDefault();
   };
 
   private describeCursor(px: number, py: number): string {

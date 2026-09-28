@@ -3,7 +3,7 @@ import { loadPalette, loadVmc, loadVmp, loadVpr, parseWorldConfig, type WorldCon
 import { renderPrepare } from './luts';
 import { applyPaletteCycle, applyWaveCycle, buildPalette, type Palette } from './palette';
 import { VrtMap } from './vmap';
-import { Viewer, type DebugMode, type RenderMode } from './viewer/viewer';
+import { Viewer, type DebugMode, type EditTool, type RenderMode } from './viewer/viewer';
 
 const sleep = (ms = 0) => new Promise((r) => setTimeout(r, ms));
 
@@ -127,6 +127,11 @@ export default function App() {
   const [shimmerSel, setShimmerSel] = useState(0);
   const [phase, setPhase] = useState(50);
 
+  const [editTool, setEditTool] = useState<EditTool>('off');
+  const [editRadius, setEditRadius] = useState(32);
+  const [editStrength, setEditStrength] = useState(8);
+  const [editSmooth, setEditSmooth] = useState(5);
+
   useEffect(() => {
     if (!canvasRef.current) return;
     const viewer = new Viewer(canvasRef.current, { onInfo: setInfo, onCursor: setCursor });
@@ -143,6 +148,18 @@ export default function App() {
     const mode = shimmerModes(config)[shimmerSel] ?? { label: 'нет', kind: 'none' as const };
     viewerRef.current.setPalette(applyShimmer(basePalette, config, mode, phase / 100));
   }, [basePalette, shimmerSel, phase, config]);
+
+  // Push editor settings to the viewer.
+  useEffect(() => {
+    viewerRef.current?.setEdit({
+      tool: editTool,
+      radius: editRadius,
+      strength: editStrength,
+      smooth: editSmooth,
+      smode: 0,
+      equDelta: 5,
+    });
+  }, [editTool, editRadius, editStrength, editSmooth]);
 
   async function buildAndShow(
     cfg: WorldConfig,
@@ -396,12 +413,81 @@ export default function App() {
             <span className="phase-val">{phase}%</span>
           </label>
         </div>
+
+        <div className="row">
+          <span className="row-label">редактор</span>
+          <label>
+            инструмент
+            <select
+              value={editTool}
+              onChange={(e) => setEditTool(e.target.value as EditTool)}
+            >
+              <option value="off">выкл</option>
+              <option value="mountain">гора (+)</option>
+              <option value="depression">впадина (−)</option>
+              <option value="smooth">сгладить</option>
+            </select>
+          </label>
+          <label>
+            радиус
+            <input
+              type="range"
+              min={1}
+              max={175}
+              value={editRadius}
+              disabled={editTool === 'off'}
+              onChange={(e) => setEditRadius(Number(e.target.value))}
+            />
+            <span className="phase-val">{editRadius}</span>
+          </label>
+          <label>
+            сила
+            <input
+              type="range"
+              min={1}
+              max={64}
+              value={editStrength}
+              disabled={editTool === 'off' || editTool === 'smooth'}
+              onChange={(e) => setEditStrength(Number(e.target.value))}
+            />
+            <span className="phase-val">{editStrength}</span>
+          </label>
+          <label>
+            сглаживание
+            <input
+              type="range"
+              min={0}
+              max={10}
+              value={editSmooth}
+              disabled={editTool === 'off'}
+              onChange={(e) => setEditSmooth(Number(e.target.value))}
+            />
+            <span className="phase-val">{editSmooth}</span>
+          </label>
+          <button disabled={!map} onClick={() => viewerRef.current?.resetEdits()}>
+            сбросить рельеф
+          </button>
+          <Hint>
+            Выберите инструмент, затем <b>ЛКМ</b> — применить (можно зажать и вести, как
+            кистью), <b>ПКМ</b> — панорама, колесо — зум.
+            <br />
+            <b>гора</b>/<b>впадина</b> приподнимают/опускают круг радиуса «радиус» на «силу»
+            за клик; «сглаживание» задаёт плавность края (0 — ровный цилиндр, 10 — только
+            склон). <b>сгладить</b> выравнивает рельеф по среднему.
+            <br />
+            «сбросить рельеф» возвращает загруженную карту высот и флаги.
+          </Hint>
+        </div>
       </header>
 
       <div id="status">{status}</div>
       {info && <div id="info">{info}</div>}
       {cursor && <div id="cursor">{cursor}</div>}
-      <div className="hint">Колесо — зум, перетаскивание — панорама.</div>
+      <div className="hint">
+        {editTool === 'off'
+          ? 'Колесо — зум, перетаскивание — панорама.'
+          : 'ЛКМ — инструмент (зажать и вести), ПКМ — панорама, колесо — зум.'}
+      </div>
       <canvas ref={canvasRef} id="view" width={1024} height={768} />
     </>
   );

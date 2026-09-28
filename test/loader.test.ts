@@ -189,3 +189,48 @@ describe('fostral world', () => {
     writePng(path.join(outDir, 'window.png'), 1024, 768, sample(0, 4096, 1024, 768, 1));
   });
 });
+
+describe('terrain editing (SURMAP Toolzer)', () => {
+  const begin = [1, 32, 64, 72, 88, 104, 112, 120];
+  const end = [31, 63, 71, 87, 103, 111, 119, 127];
+
+  function flatMap() {
+    const sizeX = 2048;
+    const sizeY = 64;
+    const height = new Uint8Array(sizeX * sizeY).fill(50);
+    const meta = new Uint8Array(sizeX * sizeY);
+    for (let i = 0; i < meta.length; i++) meta[i] = 1 << 3; // terrain 1
+    return { sizeX, sizeY, height, meta };
+  }
+
+  test('raises a flat disk with mountain and removes it with depression', () => {
+    const level = flatMap();
+    const map = new VrtMap(level, renderPrepare(begin, end, 0));
+    const cx = 1000;
+    const cy = 32;
+    const rad = 40;
+    const dh = 20;
+
+    map.deltaZone(cx, cy, rad, 0, dh, 0, 0);
+    expect(map.height[cy * level.sizeX + cx]).toBe(70);
+    expect(map.height[cy * level.sizeX + cx + rad]).toBe(70); // smth=0 -> flat disk
+    expect(map.height[cy * level.sizeX + cx + rad + 3]).toBe(50); // outside untouched
+
+    map.deltaZone(cx, cy, rad, 0, -dh, 0, 0);
+    expect(map.height[cy * level.sizeX + cx]).toBe(50);
+  });
+
+  test('clamps heights to 0..255 and resetAll restores the relief', () => {
+    const level = flatMap();
+    const map = new VrtMap(level, renderPrepare(begin, end, 0));
+
+    map.deltaZone(500, 10, 16, 0, 400, 0, 0);
+    expect(map.height[10 * level.sizeX + 500]).toBe(255);
+    map.deltaZone(500, 10, 16, 0, -400, 0, 0);
+    expect(map.height[10 * level.sizeX + 500]).toBe(0);
+
+    map.resetAll();
+    expect(map.height[10 * level.sizeX + 500]).toBe(50);
+    expect(map.height[10 * level.sizeX + 1]).toBe(50);
+  });
+});

@@ -30,6 +30,9 @@ export const MAIN_TERRAIN_INDEX = 1;
 export const WATER_TERRAIN = WATER_TERRAIN_INDEX << TERRAIN_OFFSET;
 export const MAIN_TERRAIN = MAIN_TERRAIN_INDEX << TERRAIN_OFFSET;
 
+// src/common.h (the _SURMAP_ build; the game uses 48)
+export const MAX_RADIUS = 175;
+
 // src/terra/render.h
 export const H_CORRECTION = 1;
 export const CLR_MAX_SIDE = 255;
